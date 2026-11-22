@@ -49,6 +49,7 @@ pub(crate) fn build_router(
         .layer(
             ServiceBuilder::new()
                 .layer(TraceLayer::new_for_http())
+                .layer(middleware::from_fn(super::middleware::log_server_errors))
                 .layer(CorsLayer::permissive()),
         )
         .layer(MessagesManagerLayer)

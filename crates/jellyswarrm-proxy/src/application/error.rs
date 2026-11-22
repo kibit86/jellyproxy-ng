@@ -7,6 +7,7 @@ use hyper::StatusCode;
 use crate::upstream::{delivery::DeliveryError, hls::HlsError, json::JsonTransportError};
 
 /// Workflow context, not a response code. Endpoint adapters own its HTTP policy.
+#[derive(Debug)]
 pub(crate) enum FailureStage {
     CallerAuthentication,
     CatalogEncoding,

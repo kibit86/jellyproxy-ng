@@ -18,10 +18,63 @@ use hyper::StatusCode;
 impl IntoResponse for ApplicationError {
     fn into_response(self) -> Response {
         let status = status(&self);
-        match client_message(&self) {
+        let mut response = match client_message(&self) {
             Some(message) => (status, message).into_response(),
             None => status.into_response(),
+        };
+        if status.is_server_error() {
+            // Never sent to the client: `middleware::log_server_errors` reads it to log
+            // why the request failed (the access log only has the status and latency).
+            response
+                .extensions_mut()
+                .insert(FailureReason(describe_failure(&self)));
         }
+        response
+    }
+}
+
+/// Why a request ended in a 5xx, for the server log only (a response extension).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FailureReason(pub(crate) String);
+
+/// Describe a failure chain in one line for the log. Only the workflow's own typed layers are
+/// spelled out: foreign errors (transport, anyhow, JSON) are named but never printed, because
+/// they can carry request URLs with tokens in the query string.
+pub(crate) fn describe_failure(error: &ApplicationError) -> String {
+    const MAX_SOURCES: usize = 5;
+    match error {
+        ApplicationError::At { stage, cause } => {
+            format!("{stage:?} -> {}", describe_failure(cause))
+        }
+        ApplicationError::Shared(cause) => describe_failure(cause),
+        ApplicationError::SourcesFailed(causes) => {
+            let shown = causes
+                .iter()
+                .take(MAX_SOURCES)
+                .map(describe_failure)
+                .collect::<Vec<_>>()
+                .join(" | ");
+            format!("{error} ({} failed: {shown})", causes.len())
+        }
+        ApplicationError::IncompleteCatalog { reason, cause } => match cause {
+            Some(cause) => format!("{error} (reason {reason:?}) <- {}", describe_failure(cause)),
+            None => format!("{error} (reason {reason:?})"),
+        },
+        ApplicationError::UpstreamStatus(status) => format!("{error}: {status}"),
+        ApplicationError::UpstreamTransport(source) => {
+            let kind = if source.is_timeout() {
+                "timeout"
+            } else if source.is_connect() {
+                "connect"
+            } else {
+                "other"
+            };
+            format!("{error} ({kind})")
+        }
+        ApplicationError::PlaybackResolution(source) => format!("{error}: {source:?}"),
+        ApplicationError::TargetSelection(source) => format!("{error}: {source:?}"),
+        ApplicationError::Storage(source) => format!("{error}: {source}"),
+        other => other.to_string(),
     }
 }
 
@@ -154,6 +207,52 @@ pub(crate) fn status(error: &ApplicationError) -> StatusCode {
 mod tests {
     use super::*;
     use std::error::Error;
+
+    #[test]
+    fn failure_descriptions_name_the_workflow_layers() {
+        use crate::application::catalog::scan::PartialReason;
+
+        assert_eq!(
+            describe_failure(&ApplicationError::UnavailableOwner),
+            "selected owner unavailable"
+        );
+        assert_eq!(
+            describe_failure(&ApplicationError::UnavailableOwner.at(FailureStage::PlaybackCommit)),
+            "PlaybackCommit -> selected owner unavailable"
+        );
+        assert_eq!(
+            describe_failure(&ApplicationError::IncompleteCatalog {
+                reason: PartialReason::Deadline,
+                cause: None,
+            }),
+            "incomplete catalog inventory (reason Deadline)"
+        );
+        assert_eq!(
+            describe_failure(&ApplicationError::SourcesFailed(vec![
+                ApplicationError::UpstreamStatus(StatusCode::UNAUTHORIZED),
+                ApplicationError::UnavailableOwner,
+            ])),
+            "catalog sources failed (2 failed: upstream response failure: 401 Unauthorized | selected owner unavailable)"
+        );
+        assert_eq!(
+            describe_failure(&ApplicationError::InvalidInput("empty authorization scope")),
+            "invalid operation input: empty authorization scope"
+        );
+    }
+
+    #[test]
+    fn only_server_errors_carry_a_failure_reason_and_the_status_is_unchanged() {
+        let owner = ApplicationError::UnavailableOwner.into_response();
+        assert_eq!(owner.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            owner.extensions().get::<FailureReason>(),
+            Some(&FailureReason("selected owner unavailable".to_string()))
+        );
+
+        let denied = ApplicationError::AccessDenied.into_response();
+        assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+        assert!(denied.extensions().get::<FailureReason>().is_none());
+    }
 
     #[test]
     fn only_typed_selection_failures_reach_the_client_as_messages() {

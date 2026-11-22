@@ -323,19 +323,23 @@ impl UserAuthorizationService {
         let mut incoming_session_exists_by_mapping = std::collections::BTreeSet::new();
 
         for (session, _) in sessions {
-            let session_client = normalize_device(&session.device.client);
-            let session_name = normalize_device(&session.device.device);
-            if session_client != incoming_client || session_name != incoming_name {
-                continue;
-            }
-
             let session_device_id = normalize_device(&session.device.device_id);
             if !Device::has_known_device_id(&session_device_id) {
                 continue;
             }
 
+            // The key is (user, mapping, device id): a session that already owns the incoming
+            // device id counts whatever client or device name it was stored under (an app update
+            // can rename the client). Otherwise a stale session would be renamed onto that id
+            // and violate the UNIQUE constraint.
             if session_device_id == incoming_device_id {
                 incoming_session_exists_by_mapping.insert(session.mapping_id);
+                continue;
+            }
+
+            let session_client = normalize_device(&session.device.client);
+            let session_name = normalize_device(&session.device.device);
+            if session_client != incoming_client || session_name != incoming_name {
                 continue;
             }
 

@@ -1700,6 +1700,81 @@ async fn test_android_tv_rebind_scope_does_not_touch_other_users() {
     assert!(user_b_device_ids.contains(&"old-device-id-2"));
 }
 
+/// Regression: after an app update the client name changes ("Jellyfin Android TV" ->
+/// "Jellyfin for Android TV"). A session that already owns the incoming device id but was
+/// stored under the old client name must count as "already exists", otherwise the rebind
+/// renames a stale session onto that id and violates UNIQUE(user, mapping, device_id),
+/// failing every authenticated request of the device with a 500.
+#[tokio::test]
+async fn test_android_tv_rebind_survives_existing_session_with_old_client_name() {
+    let (pool, service) = setup_service().await;
+    insert_test_server(&pool, "Test Server", "http://localhost:8096").await;
+
+    let user = service
+        .get_or_create_user("androidtv-renamed", &"testpass".into())
+        .await
+        .unwrap();
+
+    service
+        .add_server_mapping(
+            &user.id,
+            "http://localhost:8096",
+            "mappeduser",
+            &"mappedpass".into(),
+            None,
+        )
+        .await
+        .unwrap();
+
+    for (client, device_id) in [
+        ("Jellyfin+Android+TV", "incoming-device-id"),
+        ("Jellyfin+for+Android+TV", "stale-device-id"),
+    ] {
+        let auth = Authorization {
+            client: client.to_string(),
+            device: "Daniele's+Fire+TV".to_string(),
+            device_id: device_id.to_string(),
+            version: "0.18.0".to_string(),
+            token: None,
+        };
+        service
+            .store_authorization_session(
+                &user.id,
+                "http://localhost:8096",
+                &auth,
+                format!("token-{device_id}"),
+                "original-jellyfin-user-id".to_string(),
+                None,
+            )
+            .await
+            .unwrap();
+    }
+
+    let incoming_device = Device {
+        client: "Jellyfin+for+Android+TV".to_string(),
+        device: "Daniele's+Fire+TV".to_string(),
+        device_id: "incoming-device-id".to_string(),
+        version: "0.18.0".to_string(),
+    };
+
+    let rebound = service
+        .rebind_android_tv_device_sessions_if_needed(&user.id, &incoming_device)
+        .await
+        .expect("rebind must not fail on a UNIQUE conflict");
+    assert!(rebound, "the stale session should be reconciled");
+
+    let sessions = service.get_user_sessions(&user.id, None).await.unwrap();
+    let device_ids = sessions
+        .iter()
+        .map(|(session, _)| session.device.device_id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        device_ids,
+        vec!["incoming-device-id"],
+        "exactly one session must remain, on the incoming device id"
+    );
+}
+
 #[tokio::test]
 async fn test_android_tv_rebind_is_not_applied_to_other_clients() {
     let (pool, service) = setup_service().await;

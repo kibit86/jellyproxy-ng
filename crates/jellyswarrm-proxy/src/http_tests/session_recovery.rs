@@ -41,7 +41,7 @@ fn header_param(request: &Request, name: &str) -> Option<String> {
     Some(rest[..rest.find('"')?].to_owned())
 }
 
-struct Login(FakeJellyfin);
+struct Login(FakeJellyfin, usize);
 impl Respond for Login {
     fn respond(&self, request: &Request) -> ResponseTemplate {
         let mut state = (self.0).0.lock().unwrap();
@@ -59,9 +59,9 @@ impl Respond for Login {
         }
         state.valid.insert(token.clone());
         ResponseTemplate::new(200).set_body_json(json!({
-            "User":{"Id":"backend-user-0","Name":"alice","ServerId":"backend",
+            "User":{"Id":format!("backend-user-{}", self.1),"Name":"alice","ServerId":"backend",
                 "Policy":{"IsAdministrator":false,"SyncPlayAccess":"None"}},
-            "SessionInfo":{"UserId":"backend-user-0","UserName":"alice","ServerId":"backend"},
+            "SessionInfo":{"UserId":format!("backend-user-{}", self.1),"UserName":"alice","ServerId":"backend"},
             "AccessToken":token,"ServerId":"backend"
         }))
     }
@@ -86,7 +86,7 @@ async fn setup() -> (Fixture, FakeJellyfin, String) {
     let original = f.original(0).await;
     Mock::given(method("POST"))
         .and(path("/Users/AuthenticateByName"))
-        .respond_with(Login(backend.clone()))
+        .respond_with(Login(backend.clone(), 0))
         .mount(&f.upstreams[0])
         .await;
     Mock::given(method("GET"))
@@ -192,5 +192,130 @@ async fn a_backend_that_refuses_the_re_login_does_not_cause_a_loop() {
         stored_token(&f).await,
         "backend-token-0",
         "the stored session is left as it was"
+    );
+}
+
+/// What the user of a device sends after a login: the token the proxy returned.
+fn with_token(f: &Fixture, path: &str, token: &str, device_id: &str) -> reqwest::RequestBuilder {
+    reqwest::Client::new()
+        .get(format!("{}{path}", f.url))
+        .header(
+            "Authorization",
+            Authorization {
+                client: "Test".into(),
+                device: format!("Device {device_id}"),
+                device_id: device_id.into(),
+                version: "1".into(),
+                token: Some(token.to_owned()),
+            }
+            .to_header_value(),
+        )
+}
+
+async fn login(f: &Fixture, device_id: &str) -> String {
+    let response = f
+        .request(
+            reqwest::Method::POST,
+            "/Users/AuthenticateByName",
+            &f.user,
+            device_id,
+        )
+        .json(&json!({"Username":"alice","Pw":"password"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK, "login of {device_id}");
+    response.json::<Value>().await.unwrap()["AccessToken"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+#[tokio::test]
+async fn a_device_logging_in_again_replaces_only_its_own_token_and_leaves_the_others_working() {
+    let (f, backend0, url) = setup().await;
+    let backend1 = FakeJellyfin::default();
+    Mock::given(method("POST"))
+        .and(path("/Users/AuthenticateByName"))
+        .respond_with(Login(backend1.clone(), 1))
+        .mount(&f.upstreams[1])
+        .await;
+
+    let tv = login(&f, "device-tv").await;
+    let phone = login(&f, "device-phone").await;
+    assert_ne!(tv, phone, "one token per device");
+    for token in [&tv, &phone] {
+        let device = if token == &tv {
+            "device-tv"
+        } else {
+            "device-phone"
+        };
+        assert_eq!(
+            with_token(&f, &url, token, device)
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::OK
+        );
+    }
+
+    // The TV logs in again (an app update, a new session...). Its previous proxy token is revoked,
+    // like on Jellyfin; the phone is untouched and needs no re-login on the backend.
+    let tv_again = login(&f, "device-tv").await;
+    assert_eq!(
+        with_token(&f, &url, &tv, "device-tv")
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::UNAUTHORIZED,
+        "the replaced token of the same device is revoked"
+    );
+    for (token, device) in [(&tv_again, "device-tv"), (&phone, "device-phone")] {
+        assert_eq!(
+            with_token(&f, &url, token, device)
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::OK,
+            "{device}"
+        );
+    }
+    // Three logins reached the backend (tv, phone, tv again) and no request needed a repair
+    // login: the phone's backend token was never revoked because every proxy device has its own
+    // backend device id.
+    let state = backend0.0.lock().unwrap();
+    assert_eq!(state.logins, 3, "{:?}", state.login_devices);
+    let distinct: HashSet<_> = state.login_devices.iter().collect();
+    assert_eq!(
+        distinct.len(),
+        2,
+        "tv and phone, the tv twice: {:?}",
+        state.login_devices
+    );
+}
+
+#[tokio::test]
+async fn the_android_tv_device_id_may_change_after_login_without_losing_the_sessions() {
+    // The app logs in with one DeviceId and sends another afterwards (the Fire TV did).
+    let (f, backend, url) = setup().await;
+    let backend1 = FakeJellyfin::default();
+    Mock::given(method("POST"))
+        .and(path("/Users/AuthenticateByName"))
+        .respond_with(Login(backend1, 1))
+        .mount(&f.upstreams[1])
+        .await;
+    let token = login(&f, "id-sent-at-login").await;
+    let response = with_token(&f, &url, &token, "id-sent-afterwards")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        backend.0.lock().unwrap().logins,
+        1,
+        "no repair login was needed"
     );
 }

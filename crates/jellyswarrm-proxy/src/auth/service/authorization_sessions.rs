@@ -1,6 +1,37 @@
 //! Persist, encrypt, rebind, and revoke backend authorization sessions.
 use super::*;
 
+const SESSIONS_SELECT: &str = r#"
+    SELECT
+        auth.id as auth_id,
+        auth.user_id as auth_user_id,
+        auth.mapping_id as auth_mapping_id,
+        sm.server_url as auth_server_url,
+        auth.client,
+        auth.device,
+        auth.device_id,
+        auth.version,
+        auth.jellyfin_token,
+        auth.token_format,
+        auth.original_user_id,
+        auth.expires_at,
+        auth.created_at as auth_created_at,
+        auth.updated_at as auth_updated_at,
+
+        s.id as server_id,
+        s.name as server_name,
+        s.url as server_url_full,
+        s.priority,
+        s.media_streaming_mode,
+        s.created_at as server_created_at,
+        s.updated_at as server_updated_at
+    FROM authorization_sessions auth
+    JOIN server_mappings sm ON auth.mapping_id = sm.id
+    JOIN servers s ON sm.server_id = s.id"#;
+
+const SESSIONS_FILTER: &str =
+    "AND (auth.expires_at IS NULL OR auth.expires_at > ?) ORDER BY s.priority DESC, s.name ASC";
+
 impl UserAuthorizationService {
     /// Encrypt old session tokens before accepting requests. Legacy rows cannot
     /// be left in the DB indefinitely: a Quick Connect session holds the same
@@ -118,12 +149,17 @@ impl UserAuthorizationService {
             .await?
             .ok_or(sqlx::Error::RowNotFound)?;
 
+        // The session belongs to the device row of this user and device id (created here if the
+        // device did not go through the regular login).
+        let client_device = self.device_for_session(user_id, authorization).await?;
+
         let session_id = sqlx::query_scalar::<_, i64>(
             r#"
             INSERT INTO authorization_sessions
-            (user_id, mapping_id, server_url, client, device, device_id, version, jellyfin_token, token_format, original_user_id, expires_at, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (user_id, mapping_id, server_url, client, device, device_id, version, jellyfin_token, token_format, original_user_id, expires_at, created_at, updated_at, client_device_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(user_id, mapping_id, device_id) DO UPDATE SET
+                client_device_id = excluded.client_device_id,
                 server_url = excluded.server_url,
                 client = excluded.client,
                 device = excluded.device,
@@ -149,6 +185,7 @@ impl UserAuthorizationService {
         .bind(expires_at)
         .bind(now)
         .bind(now)
+        .bind(client_device.id)
         .fetch_one(&self.pool)
         .await?;
 
@@ -187,69 +224,22 @@ impl UserAuthorizationService {
         Ok(Some((user, sessions)))
     }
 
-    ///Get authorization sessions with servers for a user
+    /// Every non-expired session of a user, across all devices, with its server.
+    /// `device` (legacy header matching) narrows the list; the per-device lookup below is the
+    /// way requests find their sessions.
     pub(crate) async fn get_user_sessions(
         &self,
         user_id: &str,
         device: Option<Device>,
     ) -> Result<Vec<(AuthorizationSession, Server)>, sqlx::Error> {
-        let query = String::from(
-            r#"
-    SELECT
-        auth.id as auth_id,
-        auth.user_id as auth_user_id,
-        auth.mapping_id as auth_mapping_id,
-        sm.server_url as auth_server_url,
-        auth.client,
-        auth.device,
-        auth.device_id,
-        auth.version,
-        auth.jellyfin_token,
-        auth.token_format,
-        auth.original_user_id,
-        auth.expires_at,
-        auth.created_at as auth_created_at,
-        auth.updated_at as auth_updated_at,
-
-        s.id as server_id,
-        s.name as server_name,
-        s.url as server_url_full,
-        s.priority,
-        s.media_streaming_mode,
-        s.created_at as server_created_at,
-        s.updated_at as server_updated_at
-    FROM authorization_sessions auth
-    JOIN server_mappings sm ON auth.mapping_id = sm.id
-    JOIN servers s ON sm.server_id = s.id
-    WHERE auth.user_id = ?
-    AND (auth.expires_at IS NULL OR auth.expires_at > ?)
-    ORDER BY s.priority DESC, s.name ASC
-"#,
-        );
-
-        let rows = sqlx::query(&query)
-            .bind(user_id)
-            .bind(chrono::Utc::now())
-            .fetch_all(&self.pool)
-            .await?;
-
-        let sessions: Vec<(AuthorizationSession, Server)> = rows
-            .into_iter()
-            .map(|row| {
-                let mut session = AuthorizationSession::from_user_sessions_row(&row)?;
-                if row.try_get::<String, _>("token_format")? == "session_v1" {
-                    let key = self.session_key.as_ref().ok_or_else(|| {
-                        sqlx::Error::Protocol("session encryption key unavailable".into())
-                    })?;
-                    session.jellyfin_token = key
-                        .decrypt(&EncryptedPassword::from_raw(session.jellyfin_token))
-                        .map_err(|e| sqlx::Error::Protocol(e.to_string()))?
-                        .into_inner();
-                }
-                Ok((session, Server::from_session_join_row(&row)?))
-            })
-            .collect::<Result<_, sqlx::Error>>()?;
-
+        let rows = sqlx::query(&format!(
+            "{SESSIONS_SELECT} WHERE auth.user_id = ? {SESSIONS_FILTER}"
+        ))
+        .bind(user_id)
+        .bind(chrono::Utc::now())
+        .fetch_all(&self.pool)
+        .await?;
+        let sessions = self.decode_session_rows(rows)?;
         debug!("Found {} sessions for user_id: {}", sessions.len(), user_id);
 
         let sessions = if let Some(device) = device {
@@ -263,6 +253,43 @@ impl UserAuthorizationService {
         };
 
         Ok(sessions)
+    }
+
+    /// The sessions of one device row: what a request authenticated by that device's token may
+    /// use. No header strings are compared.
+    pub(crate) async fn get_device_sessions(
+        &self,
+        client_device_id: i64,
+    ) -> Result<Vec<(AuthorizationSession, Server)>, sqlx::Error> {
+        let rows = sqlx::query(&format!(
+            "{SESSIONS_SELECT} WHERE auth.client_device_id = ? {SESSIONS_FILTER}"
+        ))
+        .bind(client_device_id)
+        .bind(chrono::Utc::now())
+        .fetch_all(&self.pool)
+        .await?;
+        self.decode_session_rows(rows)
+    }
+
+    fn decode_session_rows(
+        &self,
+        rows: Vec<sqlx::sqlite::SqliteRow>,
+    ) -> Result<Vec<(AuthorizationSession, Server)>, sqlx::Error> {
+        rows.into_iter()
+            .map(|row| {
+                let mut session = AuthorizationSession::from_user_sessions_row(&row)?;
+                if row.try_get::<String, _>("token_format")? == "session_v1" {
+                    let key = self.session_key.as_ref().ok_or_else(|| {
+                        sqlx::Error::Protocol("session encryption key unavailable".into())
+                    })?;
+                    session.jellyfin_token = key
+                        .decrypt(&EncryptedPassword::from_raw(session.jellyfin_token))
+                        .map_err(|e| sqlx::Error::Protocol(e.to_string()))?
+                        .into_inner();
+                }
+                Ok((session, Server::from_session_join_row(&row)?))
+            })
+            .collect()
     }
 
     /// Resolve abbreviated authenticated headers without weakening normal device matching.

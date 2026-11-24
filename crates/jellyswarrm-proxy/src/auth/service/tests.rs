@@ -2499,3 +2499,267 @@ async fn ordinary_and_unknown_users_are_not_administrators() {
     assert!(!service.is_admin(&viewer.id).await.unwrap());
     assert!(!service.is_admin("no-such-user").await.unwrap());
 }
+
+// ---- Token per dispositivo (modello di Jellyfin) ------------------------------------------------
+
+fn device_login(device_id: &str, name: &str) -> Authorization {
+    Authorization {
+        client: "Jellyfin Test".to_string(),
+        device: name.to_string(),
+        device_id: device_id.to_string(),
+        version: "1.0".to_string(),
+        token: None,
+    }
+}
+
+async fn user_with_server_mapping(
+    pool: &SqlitePool,
+    service: &UserAuthorizationService,
+    name: &str,
+) -> LocalUser {
+    insert_test_server(pool, "Server", "http://localhost:8096").await;
+    let user = service
+        .get_or_create_user(name, &"pw".into())
+        .await
+        .unwrap();
+    service
+        .add_server_mapping(
+            &user.id,
+            "http://localhost:8096",
+            "mapped",
+            &"mappedpw".into(),
+            None,
+        )
+        .await
+        .unwrap();
+    user
+}
+
+async fn store_session(service: &UserAuthorizationService, user: &LocalUser, auth: &Authorization) {
+    service
+        .store_authorization_session(
+            &user.id,
+            "http://localhost:8096",
+            auth,
+            format!("backend-token-for-{}", auth.device_id),
+            "backend-user".to_string(),
+            None,
+        )
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_device_token_resolves_to_its_user_and_device_and_is_stored_only_as_a_hash() {
+    let (pool, service) = setup_service().await;
+    let user = user_with_server_mapping(&pool, &service, "alice").await;
+    let (device, token) = service
+        .login_device(&user.id, &device_login("tv-1", "Living room TV"))
+        .await
+        .unwrap();
+    assert_eq!(token.len(), 64, "32 random bytes in hex");
+
+    let (found_user, found_device) = service.find_device_by_token(&token).await.unwrap().unwrap();
+    assert_eq!(found_user.id, user.id);
+    assert_eq!(found_device.id, device.id);
+    assert_eq!(found_device.device_id, "tv-1");
+    assert_eq!(found_device.device_name, "Living room TV");
+
+    let stored: String = sqlx::query_scalar("SELECT token_hash FROM client_devices WHERE id = ?")
+        .bind(device.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_ne!(stored, token, "the clear token must not be stored");
+    assert_eq!(stored, super::client_devices::token_hash(&token));
+    assert!(service
+        .find_device_by_token("not-a-token")
+        .await
+        .unwrap()
+        .is_none());
+    assert!(
+        service
+            .find_device_by_token(&user.virtual_key)
+            .await
+            .unwrap()
+            .is_none(),
+        "the old per-user key is not a token any more"
+    );
+}
+
+#[tokio::test]
+async fn logging_the_same_device_in_again_revokes_its_old_token_and_backend_sessions() {
+    let (pool, service) = setup_service().await;
+    let user = user_with_server_mapping(&pool, &service, "alice").await;
+    let auth = device_login("tv-1", "TV");
+    let (first, first_token) = service.login_device(&user.id, &auth).await.unwrap();
+    store_session(&service, &user, &auth).await;
+    assert_eq!(
+        service
+            .get_user_sessions(&user.id, None)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+
+    let (second, second_token) = service.login_device(&user.id, &auth).await.unwrap();
+    assert_ne!(first.id, second.id);
+    assert_ne!(first_token, second_token);
+    assert!(
+        service
+            .find_device_by_token(&first_token)
+            .await
+            .unwrap()
+            .is_none(),
+        "the previous token of the same device is revoked, as in Jellyfin"
+    );
+    assert!(service
+        .find_device_by_token(&second_token)
+        .await
+        .unwrap()
+        .is_some());
+    assert!(
+        service
+            .get_user_sessions(&user.id, None)
+            .await
+            .unwrap()
+            .is_empty(),
+        "the replaced device takes its backend sessions with it"
+    );
+}
+
+#[tokio::test]
+async fn two_devices_of_the_same_user_do_not_revoke_each_other() {
+    let (pool, service) = setup_service().await;
+    let user = user_with_server_mapping(&pool, &service, "alice").await;
+    let (tv, tv_token) = service
+        .login_device(&user.id, &device_login("tv-1", "TV"))
+        .await
+        .unwrap();
+    let (phone, phone_token) = service
+        .login_device(&user.id, &device_login("phone-1", "Phone"))
+        .await
+        .unwrap();
+    store_session(&service, &user, &device_login("tv-1", "TV")).await;
+    store_session(&service, &user, &device_login("phone-1", "Phone")).await;
+    assert_ne!(tv.id, phone.id);
+
+    // The phone logs in again: only the phone is replaced.
+    service
+        .login_device(&user.id, &device_login("phone-1", "Phone"))
+        .await
+        .unwrap();
+    assert!(service
+        .find_device_by_token(&phone_token)
+        .await
+        .unwrap()
+        .is_none());
+    assert!(service
+        .find_device_by_token(&tv_token)
+        .await
+        .unwrap()
+        .is_some());
+    let remaining = service.get_user_sessions(&user.id, None).await.unwrap();
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].0.device.device_id, "tv-1");
+}
+
+#[tokio::test]
+async fn the_same_device_id_of_two_users_stays_separate() {
+    let (pool, service) = setup_service().await;
+    let alice = user_with_server_mapping(&pool, &service, "alice").await;
+    let bob = service
+        .get_or_create_user("bob", &"pw".into())
+        .await
+        .unwrap();
+    let (_, alice_token) = service
+        .login_device(&alice.id, &device_login("shared", "TV"))
+        .await
+        .unwrap();
+    let (_, bob_token) = service
+        .login_device(&bob.id, &device_login("shared", "TV"))
+        .await
+        .unwrap();
+    assert_eq!(
+        service
+            .find_device_by_token(&alice_token)
+            .await
+            .unwrap()
+            .unwrap()
+            .0
+            .id,
+        alice.id
+    );
+    assert_eq!(
+        service
+            .find_device_by_token(&bob_token)
+            .await
+            .unwrap()
+            .unwrap()
+            .0
+            .id,
+        bob.id
+    );
+}
+
+#[tokio::test]
+async fn touching_a_device_updates_metadata_but_never_its_identity_or_token() {
+    let (pool, service) = setup_service().await;
+    let user = user_with_server_mapping(&pool, &service, "alice").await;
+    let (device, token) = service
+        .login_device(&user.id, &device_login("tv-1", "Old name"))
+        .await
+        .unwrap();
+    let mut seen = device_login("another-id-sent-by-the-app", "New name");
+    seen.version = "2.0".to_string();
+    service.touch_device(&device, Some(&seen)).await.unwrap();
+
+    let (_, after) = service.find_device_by_token(&token).await.unwrap().unwrap();
+    assert_eq!(after.id, device.id);
+    assert_eq!(
+        after.device_id, "tv-1",
+        "the DeviceId header never changes the stored identity"
+    );
+    assert_eq!(after.device_name, "New name");
+    assert_eq!(after.version, "2.0");
+}
+
+#[tokio::test]
+async fn a_request_with_a_different_device_id_header_still_finds_its_sessions_by_token() {
+    // The Android TV case: the app logs in with one device id and sends another afterwards.
+    let (pool, service) = setup_service().await;
+    let user = user_with_server_mapping(&pool, &service, "alice").await;
+    let login = device_login("id-sent-at-login", "Fire TV");
+    let (device, token) = service.login_device(&user.id, &login).await.unwrap();
+    store_session(&service, &user, &login).await;
+
+    let (_, resolved) = service.find_device_by_token(&token).await.unwrap().unwrap();
+    assert_eq!(resolved.id, device.id);
+    let sessions = service.get_device_sessions(resolved.id).await.unwrap();
+    assert_eq!(
+        sessions.len(),
+        1,
+        "sessions follow the device row, not header strings"
+    );
+}
+
+#[tokio::test]
+async fn deleting_a_device_removes_its_token_and_sessions() {
+    let (pool, service) = setup_service().await;
+    let user = user_with_server_mapping(&pool, &service, "alice").await;
+    let auth = device_login("tv-1", "TV");
+    let (device, token) = service.login_device(&user.id, &auth).await.unwrap();
+    store_session(&service, &user, &auth).await;
+    assert!(service.delete_device(device.id).await.unwrap());
+    assert!(service
+        .find_device_by_token(&token)
+        .await
+        .unwrap()
+        .is_none());
+    assert!(service
+        .get_user_sessions(&user.id, None)
+        .await
+        .unwrap()
+        .is_empty());
+}

@@ -52,6 +52,8 @@ impl<'a> From<&'a &'a str> for ServerReference<'a> {
 }
 
 mod api_keys;
+mod client_devices;
+pub(crate) use client_devices::ClientDevice;
 mod server_mappings;
 pub(crate) use server_mappings::MappingCredentialError;
 mod authorization_sessions;

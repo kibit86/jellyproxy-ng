@@ -1,6 +1,6 @@
 //! Own authorization-service configuration and compose focused user, API-key, mapping, and session operations.
 use sqlx::{Row, SqlitePool};
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 use crate::domain::ids::ServerId;
 use crate::domain::security::{
@@ -15,7 +15,7 @@ pub(crate) use super::models::{
     AuthorizationSession, CredentialFormat, LocalUser, MappingAuth, ServerMapping,
     VirtualUserApiKey,
 };
-use crate::protocol::device::{is_android_tv_client, normalize_device, Device};
+use crate::protocol::device::Device;
 #[derive(Debug, Clone)]
 pub(crate) struct UserAuthorizationService {
     pool: SqlitePool,
@@ -52,6 +52,10 @@ impl<'a> From<&'a &'a str> for ServerReference<'a> {
 }
 
 mod api_keys;
+mod client_devices;
+#[cfg(test)]
+pub(crate) use client_devices::test_token;
+pub(crate) use client_devices::ClientDevice;
 mod server_mappings;
 pub(crate) use server_mappings::MappingCredentialError;
 mod authorization_sessions;

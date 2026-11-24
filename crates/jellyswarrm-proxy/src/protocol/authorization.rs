@@ -55,6 +55,7 @@ impl Authorization {
             .or_else(|| header("x-mediabrowser-token").map(str::to_owned))
     }
 
+    #[cfg(test)]
     pub(crate) fn has_complete_metadata(&self) -> bool {
         !self.client.is_empty()
             && !self.device.is_empty()

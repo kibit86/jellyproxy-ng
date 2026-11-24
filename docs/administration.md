@@ -86,3 +86,17 @@ running without discovery and retries every few seconds.
 `dev/e2e-fresh-install/` holds a Docker + Chrome test that starts two brand-new
 Jellyfin servers and an empty proxy, creates the users everywhere and walks through
 all of the above.
+
+## Tokens and devices (from 2.0.0)
+
+The proxy follows Jellyfin's model. Each **device** that logs in (one row per user and device id) gets
+its own proxy token; logging the same device in again replaces that token (the old one stops working)
+and signing out removes the device. Other devices of the same user are not affected.
+
+- **After upgrading to 2.0.0 every app must log in again** (Quick Connect works): the old
+  per-user token is no longer accepted and the stored backend sessions are dropped.
+- A server that refuses a stored session token (for example because the account was signed out there)
+  is logged in again automatically with the saved credentials. A server connected with **Quick Connect**
+  cannot be repaired this way: reconnect it in *My servers*.
+- Read-only API keys are separate credentials and are not devices.
+

@@ -147,7 +147,7 @@ impl Fixture {
 
     async fn request(&self, method: Method, path: &str, body: Option<Value>) -> reqwest::Response {
         let mut request = self.state.reqwest_client.request(method, format!("{}{path}", self.url))
-            .header("Authorization", format!("MediaBrowser Client=\"playlist-test\", Device=\"test\", DeviceId=\"test\", Version=\"1\", Token=\"{}\"", self.caller.virtual_key));
+            .header("Authorization", format!("MediaBrowser Client=\"playlist-test\", Device=\"test\", DeviceId=\"test\", Version=\"1\", Token=\"{}\"", crate::auth::service::test_token(&self.caller.id, "test")));
         if let Some(body) = body {
             request = request.json(&body);
         }

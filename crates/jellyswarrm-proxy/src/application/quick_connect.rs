@@ -130,6 +130,12 @@ async fn redeem_owned(
     if mappings.is_empty() {
         return Err(QuickConnectError::Unauthorized);
     }
+    // One device row and one token for this redemption, shared by every backend worker: same
+    // rule as a password login (a repeated login of the device replaces its previous token).
+    let (_device, access_token) = state
+        .user_authorization
+        .login_device(&user.id, &authorization)
+        .await?;
     // Only this coordinator owns these workers. It is not aborted when the
     // request is cancelled, and drains the set before dropping the reservation.
     let mut tasks = tokio::task::JoinSet::new();
@@ -145,10 +151,18 @@ async fn redeem_owned(
         let user = user.clone();
         let authorization = authorization.clone();
         let hooks = hooks.clone();
+        let access_token = access_token.clone();
         tasks.spawn(async move {
-            let result =
-                authenticate_and_register(&state, &user, &server, &mapping, &authorization, &hooks)
-                    .await;
+            let result = authenticate_and_register(
+                &state,
+                &user,
+                &server,
+                &mapping,
+                &authorization,
+                &hooks,
+                &access_token,
+            )
+            .await;
             (order, result)
         });
     }
@@ -182,6 +196,7 @@ async fn authenticate_and_register(
     mapping: &crate::auth::service::ServerMapping,
     authorization: &Authorization,
     hooks: &RegistrationHooks,
+    access_token: &str,
 ) -> Result<AuthenticateResponse, crate::auth::mapping_authentication::MappingAuthenticationError> {
     let mut response = state
         .mapping_authenticator
@@ -192,7 +207,11 @@ async fn authenticate_and_register(
             jellyfin_api::ClientInfo {
                 client: authorization.client.clone(),
                 device: authorization.device.clone(),
-                device_id: authorization.device_id.clone(),
+                device_id: crate::auth::mapping_authentication::backend_device_id(
+                    server,
+                    &user.original_username,
+                    &authorization.device_id,
+                ),
                 version: authorization.version.clone(),
             },
         )
@@ -229,11 +248,12 @@ async fn authenticate_and_register(
     response.session_info.user_id = user.id.to_string();
     response.session_info.user_name = user.original_username.clone();
     response.user.policy.sync_play_access = SyncPlayUserAccessType::CreateAndJoinGroups;
-    response.access_token = user.virtual_key.clone();
+    response.access_token = access_token.to_owned();
     crate::application::client_sessions::decorate_authentication(
         &state.client_sessions,
         &state.settings.read().await.server_id,
         user,
+        access_token,
         authorization,
         &mut response,
     )
@@ -414,7 +434,18 @@ mod tests {
             .unwrap();
         let retry = quick_connect.begin_redemption(&secret).unwrap();
         let response = redeem(&state, retry, Some(client)).await.unwrap();
-        assert_eq!(response.access_token, user.virtual_key);
+        assert_ne!(
+            response.access_token, user.virtual_key,
+            "not the per-user key any more"
+        );
+        let (resolved, device) = state
+            .user_authorization
+            .get_caller_by_token(&response.access_token)
+            .await
+            .unwrap()
+            .expect("the returned token is a device token");
+        assert_eq!(resolved.id, user.id);
+        assert!(device.is_some());
         assert!(matches!(
             quick_connect.begin_redemption(&secret),
             Err(RedemptionError::NotFound)

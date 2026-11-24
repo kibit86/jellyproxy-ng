@@ -354,6 +354,19 @@ impl MappingAuthenticator {
     }
 }
 
+/// The device id the proxy uses on a backend for one client device of one proxy user.
+///
+/// Jellyfin keeps one token per (user, device id) and revokes the previous one on every new
+/// login with the same device id. Using the client's own id would let two proxy rows fight over
+/// one backend token. This id is owned by the proxy, stable for the same client device (so a new
+/// login replaces that device's own backend token, exactly as Jellyfin intends) and different for
+/// every other device, user and server.
+pub(crate) fn backend_device_id(server: &Server, username: &str, client_device_id: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(format!("{}\0{}", username.to_lowercase(), client_device_id));
+    format!("jellyswarrm-{}-{}", server.id, &hex::encode(digest)[..24])
+}
+
 pub(crate) fn mapping_device_id(server: &Server, user_id: &str) -> String {
     format!("jellyswarrm-{}-{}", server.id, user_id)
 }

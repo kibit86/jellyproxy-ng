@@ -179,35 +179,17 @@ impl UserAuthorizationService {
     }
 
     /// Get user by virtual key
-    pub(crate) async fn get_user_by_virtual_key(
-        &self,
-        virtual_key: &str,
-    ) -> Result<Option<LocalUser>, sqlx::Error> {
-        let user = sqlx::query_as::<_, LocalUser>(
-            r#"
-            SELECT id, virtual_key, original_username, original_password_hash,
-                   local_credential_kind, created_at, updated_at
-            FROM users
-            WHERE virtual_key = ?
-            "#,
-        )
-        .bind(virtual_key)
-        .fetch_optional(&self.pool)
-        .await?;
-
-        Ok(user)
-    }
-
     /// Resolve either a login token or an application API key to its virtual user.
-    pub(crate) async fn get_user_by_token(
+    /// Who is calling: the user and, for a device token, the device. A read-only API key has no
+    /// device. The old per-user `virtual_key` is no longer a credential.
+    pub(crate) async fn get_caller_by_token(
         &self,
         token: &str,
-    ) -> Result<Option<LocalUser>, sqlx::Error> {
-        if let Some(user) = self.get_user_by_virtual_key(token).await? {
-            return Ok(Some(user));
+    ) -> Result<Option<(LocalUser, Option<super::ClientDevice>)>, sqlx::Error> {
+        if let Some((user, device)) = self.find_device_by_token(token).await? {
+            return Ok(Some((user, Some(device))));
         }
-
-        sqlx::query_as::<_, LocalUser>(
+        let user = sqlx::query_as::<_, LocalUser>(
             r#"
             SELECT u.id, u.virtual_key, u.original_username, u.original_password_hash,
                    u.local_credential_kind, u.created_at, u.updated_at
@@ -218,7 +200,15 @@ impl UserAuthorizationService {
         )
         .bind(token)
         .fetch_optional(&self.pool)
-        .await
+        .await?;
+        Ok(user.map(|user| (user, None)))
+    }
+
+    pub(crate) async fn get_user_by_token(
+        &self,
+        token: &str,
+    ) -> Result<Option<LocalUser>, sqlx::Error> {
+        Ok(self.get_caller_by_token(token).await?.map(|(user, _)| user))
     }
 
     /// Get user by virtual ID, accepting equivalent UUID formats.

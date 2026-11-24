@@ -31,13 +31,8 @@ where
                 StatusCode::INTERNAL_SERVER_ERROR
             })?;
         let user = identity.user.ok_or(StatusCode::UNAUTHORIZED)?;
-        let token = identity
-            .auth
-            .as_ref()
-            .and_then(|auth| auth.token_ref())
-            .ok_or(StatusCode::UNAUTHORIZED)?;
-
-        if token != user.virtual_key {
+        // A device token is the user's own login; a read-only API key is not.
+        if identity.client_device.is_none() {
             return Err(StatusCode::FORBIDDEN);
         }
 

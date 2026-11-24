@@ -98,14 +98,18 @@ async fn resolve_authorize_user_id(
         StatusCode::BAD_REQUEST
     })?;
 
-    let user = state
-        .get_user_by_virtual_key(&token)
+    // Only a logged-in device may approve (a read-only API key cannot).
+    let (user, device) = state
+        .get_caller_by_token(&token)
         .await
         .map_err(|e| {
-            warn!("Failed to resolve user from virtual token: {}", e);
+            warn!("Failed to resolve user from device token: {}", e);
             StatusCode::INTERNAL_SERVER_ERROR
         })?
         .ok_or(StatusCode::UNAUTHORIZED)?;
+    if device.is_none() {
+        return Err(StatusCode::FORBIDDEN);
+    }
 
     // A userId parameter selects no authority of its own. Approval must always
     // belong to the authenticated caller, never an arbitrary local account.
@@ -214,8 +218,22 @@ mod tests {
             .create_user("caller", &"password".into())
             .await
             .unwrap();
+        let (_device, token) = state
+            .user_authorization
+            .login_device(
+                &user.id,
+                &Authorization {
+                    client: "Jellyfin Web".into(),
+                    device: "Firefox".into(),
+                    device_id: "caller-device".into(),
+                    version: "1".into(),
+                    token: None,
+                },
+            )
+            .await
+            .unwrap();
         let mut headers = HeaderMap::new();
-        headers.insert("x-emby-token", user.virtual_key.parse().unwrap());
+        headers.insert("x-emby-token", token.parse().unwrap());
         assert_eq!(
             resolve_authorize_user_id(&state.user_authorization, &headers, Some("victim".into()))
                 .await
@@ -371,12 +389,18 @@ mod tests {
             "0.19.7".to_string(),
         );
 
+        // The browser is a logged-in device: it owns the token the approval is made with.
+        state
+            .user_authorization
+            .register_test_device(&user.id, &existing_web_auth)
+            .await
+            .unwrap();
+        let browser_token = crate::auth::service::test_token(&user.id, "web-device-id");
         let mut browser_headers = HeaderMap::new();
         browser_headers.insert(
             "authorization",
             HeaderValue::from_str(&format!(
-                "MediaBrowser Client=\"Jellyfin Web\", Device=\"Firefox\", DeviceId=\"web-device-id\", Version=\"10.10.7\", Token=\"{}\"",
-                user.virtual_key
+                "MediaBrowser Client=\"Jellyfin Web\", Device=\"Firefox\", DeviceId=\"web-device-id\", Version=\"10.10.7\", Token=\"{browser_token}\""
             ))
             .unwrap(),
         );
@@ -414,7 +438,17 @@ mod tests {
         .1
          .0;
 
-        assert_eq!(auth_response.access_token, user.virtual_key);
+        assert_ne!(auth_response.access_token, user.virtual_key);
+        assert_ne!(auth_response.access_token, browser_token);
+        assert_eq!(
+            state
+                .user_authorization
+                .get_user_by_token(&auth_response.access_token)
+                .await
+                .unwrap()
+                .map(|resolved| resolved.id),
+            Some(user.id.clone())
+        );
 
         let all_sessions = state
             .user_authorization

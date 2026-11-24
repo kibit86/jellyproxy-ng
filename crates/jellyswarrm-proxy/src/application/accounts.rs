@@ -46,6 +46,8 @@ pub(crate) struct RequestIdentity {
     pub(crate) auth: Option<JellyfinAuthorization>,
     pub(crate) user: Option<LocalUser>,
     pub(crate) device: Option<Device>,
+    /// The device row of the caller's token. `None` for read-only API keys and anonymous requests.
+    pub(crate) client_device: Option<crate::auth::service::ClientDevice>,
 }
 
 pub(crate) async fn resolve_identity(
@@ -55,18 +57,27 @@ pub(crate) async fn resolve_identity(
 ) -> Result<RequestIdentity, sqlx::Error> {
     let auth = JellyfinAuthorization::from_headers_url(headers, url);
     let device = request_device(headers, url, auth.as_ref());
-    let user = user_for_credential(auth.as_ref(), authorization).await?;
-    Ok(RequestIdentity { auth, user, device })
+    let caller = caller_for_credential(auth.as_ref(), authorization).await?;
+    let (user, client_device) = match caller {
+        Some((user, device)) => (Some(user), device),
+        None => (None, None),
+    };
+    Ok(RequestIdentity {
+        auth,
+        user,
+        device,
+        client_device,
+    })
 }
 
-pub(crate) async fn user_for_credential(
+pub(crate) async fn caller_for_credential(
     auth: Option<&JellyfinAuthorization>,
     authorization: &UserAuthorizationService,
-) -> Result<Option<LocalUser>, sqlx::Error> {
+) -> Result<Option<(LocalUser, Option<crate::auth::service::ClientDevice>)>, sqlx::Error> {
     let Some(token) = auth.and_then(JellyfinAuthorization::token_ref) else {
         return Ok(None);
     };
-    authorization.get_user_by_token(token).await
+    authorization.get_caller_by_token(token).await
 }
 
 /// The administrator flag to show this caller: they are an administrator on at
@@ -435,6 +446,13 @@ pub(crate) async fn authenticate_by_name(
         let user =
             resolve_or_create_login_user(state, &payload.username, &payload.password).await?;
 
+        // Same rule as Jellyfin: logging a device in again replaces its row, so its previous token
+        // is revoked and its previous backend sessions are dropped before the new ones are stored.
+        let (_device, access_token) = state
+            .user_authorization
+            .login_device(&user.id, &authentication)
+            .await
+            .map_err(ApplicationError::Storage)?;
         persist_successful_auths(state, &user, &authentication, &successful_auths).await?;
         // The backends just told us who is an administrator there.
         for successful in &successful_auths {
@@ -457,6 +475,7 @@ pub(crate) async fn authenticate_by_name(
             &authentication,
             &successful_auths[0],
             is_administrator,
+            &access_token,
         )
         .await;
 
@@ -552,6 +571,7 @@ async fn decorate_auth_response(
     login_authorization: &Authorization,
     successful_auth: &SuccessfulServerAuth,
     is_administrator: bool,
+    access_token: &str,
 ) -> AuthenticateResponse {
     let mut auth_response = successful_auth.auth_response.clone();
     let server_id = state.settings.read().await.server_id.clone();
@@ -567,12 +587,13 @@ async fn decorate_auth_response(
     auth_response.user.policy.is_administrator = is_seerr_client(login_authorization)
         || (is_administrator && !is_web_client(login_authorization));
     auth_response.user.policy.sync_play_access = SyncPlayUserAccessType::CreateAndJoinGroups;
-    auth_response.access_token = user.virtual_key.clone();
+    auth_response.access_token = access_token.to_owned();
     auth_response.user.id = user.id.to_string();
     crate::application::client_sessions::decorate_authentication(
         &state.client_sessions,
         &state.settings.read().await.server_id,
         user,
+        access_token,
         login_authorization,
         &mut auth_response,
     )
@@ -715,10 +736,16 @@ async fn authenticate_on_server(
     server: crate::servers::storage::Server,
     server_mapping: Option<crate::auth::service::ServerMapping>,
 ) -> Result<SuccessfulServerAuth, AuthError> {
+    // Name and version are the client's (so the backend lists a recognisable device); the device
+    // id is the proxy's own, see `backend_device_id`.
     let client_info = jellyfin_api::ClientInfo {
         client: authorization.client,
         device: authorization.device,
-        device_id: authorization.device_id,
+        device_id: crate::auth::mapping_authentication::backend_device_id(
+            &server,
+            &payload.username,
+            &authorization.device_id,
+        ),
         version: authorization.version,
     };
     let authenticator = &state.mapping_authenticator;

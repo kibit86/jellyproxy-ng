@@ -323,7 +323,7 @@ async fn app_device(f: &Fixture, client: &str) -> String {
             .unwrap();
     }
     Authorization {
-        token: Some(f.user.virtual_key.clone()),
+        token: Some(f.token()),
         ..authorization
     }
     .to_header_value()

@@ -150,7 +150,7 @@ async fn http_catalog_input_validates_offline_ids_without_initial_backend_select
         .with_state(state.services.clone());
     let send = |uri: String| {
         let app = app.clone();
-        let auth = format!("MediaBrowser Client=\"test\", Device=\"test\", DeviceId=\"test\", Version=\"1\", Token=\"{}\"", user.virtual_key);
+        let auth = format!("MediaBrowser Client=\"test\", Device=\"test\", DeviceId=\"test\", Version=\"1\", Token=\"{}\"", crate::auth::service::test_token(&user.id, "test"));
         async move {
             app.oneshot(
                 axum::http::Request::builder()
@@ -534,7 +534,7 @@ async fn check_web_album_sorting(sort_by: &str, ascending_names: &[&str]) {
             }
             for (start, limit) in [(0, 4), (1, 2)] {
                 let mut request = reqwest::Client::new().get(format!("{base_url}/Items"))
-                    .header("Authorization", format!("MediaBrowser Client=\"album-test\", Device=\"test\", DeviceId=\"album-test\", Version=\"1\", Token=\"{}\"", user.virtual_key))
+                    .header("Authorization", format!("MediaBrowser Client=\"album-test\", Device=\"test\", DeviceId=\"album-test\", Version=\"1\", Token=\"{}\"", crate::auth::service::test_token(&user.id, "album-test")))
                     .query(&[
                         ("userId", user.id.as_str()), ("includeItemTypes", "MusicAlbum"),
                         ("recursive", "true"), (order_key, order),

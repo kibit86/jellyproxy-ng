@@ -12,7 +12,10 @@ Handlers receive their service handles from `http/state.rs`.
 ## Authenticating with backend servers
 
 JellyProxy-NG separates the **proxy login token** clients use from the **backend
-tokens** Jellyfin servers accept.
+tokens** Jellyfin servers accept. It follows Jellyfin's own model for both: a token
+belongs to one **device** (one row per user and device id), logging the same device in
+again replaces that row and revokes its previous token, and a request is identified by
+its token alone (the `DeviceId` header only refreshes the device's name and version).
 
 ### Logging in
 
@@ -27,7 +30,8 @@ flowchart TD
     Backend --> Success{Any backend succeeds?}
     Success -->|No| Denied[Login fails]
     Success -->|Yes| Save[Store backend tokens and backend user IDs per device/server]
-    Save --> Response[Return proxy user ID and proxy login token]
+    Save --> Device[Replace this device's row: new token, old one revoked]
+    Device --> Response[Return proxy user ID and the device's proxy token]
 ```
 
 - **Existing user:** the local credential must pass first. Only saved server
@@ -38,8 +42,13 @@ flowchart TD
   are tried on configured servers. At least one must succeed before the local
   user and successful mappings are created. Otherwise login is denied.
 
-Backend session tokens are encrypted in storage. The login response substitutes
-the local user's virtual IDs and uses the proxy token as its `AccessToken`.
+Backend session tokens are encrypted in storage and belong to the device row
+(`client_devices`): deleting the device (logout, or a new login of the same device)
+deletes its backend sessions. The proxy logs in on each backend with a device id of
+its own, stable for one client device (`backend_device_id`), so one device's re-login
+never revokes another device's backend token. The login response substitutes the
+local user's virtual IDs and uses the **device's** proxy token as its `AccessToken`
+(only a SHA-256 hash is stored).
 
 **Code:** [login handler](src/http/client_routes/mod.rs) →
 [login orchestration](src/application/accounts.rs) →
@@ -59,9 +68,15 @@ flowchart TD
 ```
 
 Tokens can arrive in supported Jellyfin authorization/token headers or an
-`api_key`/`ApiKey` query parameter. Media requests reuse stored backend sessions,
-matching device metadata when available and filtering for healthy servers; they
-do not repeat password authentication on every request. A mapping defines access
+`api_key`/`ApiKey` query parameter. The token resolves the user and the device;
+the device's stored backend sessions are used, filtered for healthy servers. No
+header string is compared with a stored one. When a backend answers 401 for a
+stored token (revoked by Jellyfin, by an administrator, or by a newer login of the
+same backend device), the proxy logs that device in again **once** for that session
+(`application/session_recovery.rs`, one re-login at a time per session) and repeats
+the request once; a Quick Connect mapping cannot be repaired this way and must be
+reconnected in My servers. Requests do not otherwise repeat password
+authentication. A mapping defines access
 scope but does not by itself provide a usable backend session.
 Application API keys are read-only proxy credentials, not new Jellyfin tokens.
 

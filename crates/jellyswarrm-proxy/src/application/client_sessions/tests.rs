@@ -64,11 +64,28 @@ impl Fixture {
         )
     }
 
+    /// The user's `virtual_key` field carries the token of its registered `tv` device.
     async fn user(&self) -> LocalUser {
-        self.authorization
+        let mut user = self
+            .authorization
             .create_user("Alice", &"".into())
             .await
-            .unwrap()
+            .unwrap();
+        self.authorization
+            .register_test_device(
+                &user.id,
+                &crate::protocol::authorization::Authorization {
+                    client: "Test".into(),
+                    device: "tv".into(),
+                    device_id: "tv".into(),
+                    version: "1".into(),
+                    token: None,
+                },
+            )
+            .await
+            .unwrap();
+        user.virtual_key = crate::auth::service::test_token(&user.id, "tv");
+        user
     }
 
     async fn connect(

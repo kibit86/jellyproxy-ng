@@ -106,6 +106,9 @@ pub(super) fn adapter_state(
         mapping_authenticator: mapping_authenticator.clone(),
         admin_rights: admin_rights.clone(),
     };
+    let session_recovery = Arc::new(application::session_recovery::SessionRecovery::new(
+        mapping_authenticator.clone(),
+    ));
     let management = ManagementState {
         reqwest_client: clients.api.clone(),
         streaming_client: clients.streaming.clone(),
@@ -164,6 +167,7 @@ pub(super) fn adapter_state(
         client_sessions,
         catalog_snapshots,
         admin_rights,
+        session_recovery,
         url_prefix,
     };
     AppState::new(

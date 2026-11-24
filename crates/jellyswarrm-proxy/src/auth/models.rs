@@ -166,6 +166,7 @@ impl<'r> sqlx::FromRow<'r, SqliteRow> for ServerMapping {
 pub(crate) struct AuthorizationSession {
     pub(crate) id: i64,
     pub(crate) user_id: UserId,
+    #[expect(dead_code, reason = "Read by the re-login on 401, added next")]
     pub(crate) mapping_id: i64, // FK to server_mappings.id enabling cascade delete
     pub(crate) server_url: String,
     pub(crate) device: Device,
@@ -176,7 +177,15 @@ pub(crate) struct AuthorizationSession {
         reason = "Expiry is filtered in SQL; retain decoding of persisted expiry"
     )]
     pub(crate) expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[expect(
+        dead_code,
+        reason = "Decoded for completeness; only the token and device are used"
+    )]
     pub(crate) created_at: chrono::DateTime<chrono::Utc>,
+    #[expect(
+        dead_code,
+        reason = "Decoded for completeness; only the token and device are used"
+    )]
     pub(crate) updated_at: chrono::DateTime<chrono::Utc>,
 }
 

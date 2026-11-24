@@ -763,11 +763,15 @@ async fn execute_raw_items_request(
     // the server refused and with which status.
     let method = request.method().clone();
     let path = request.url().path().to_owned();
-    let response =
-        crate::application::request::response::execute_json_request::<serde_json::Value>(
-            &state.reqwest_client,
-            request,
-        )
+    // A 401 for the stored token is repaired once by logging the device in again.
+    let response = state
+        .with_recovery(&server, request, |request| async {
+            crate::application::request::response::execute_json_request::<serde_json::Value>(
+                &state.reqwest_client,
+                request,
+            )
+            .await
+        })
         .await
         .inspect_err(|e| {
             error!(

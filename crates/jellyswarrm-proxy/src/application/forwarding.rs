@@ -225,11 +225,17 @@ pub(crate) async fn forward(
 
     let upstream = build_upstream_request(state, &prepared).await?;
     let is_mutation = !matches!(*upstream.method(), Method::GET | Method::HEAD);
-    let response = state
+    let mut response = state
         .reqwest_client
         .execute(upstream)
         .await
         .map_err(|error| ApplicationError::UpstreamTransport(error.without_url()))?;
+    if response.status() == StatusCode::UNAUTHORIZED {
+        // The backend revoked the stored token: log the device in again once and retry.
+        if let Some(retried) = retry_after_unauthorized(state, &prepared).await? {
+            response = retried;
+        }
+    }
     let status = response.status();
     if status.is_success() {
         observe_success(state, &prepared, is_mutation).await;
@@ -262,6 +268,42 @@ pub(crate) async fn forward(
 }
 
 /// Backend URL and credentials, plus virtual→backend IDs in the JSON body.
+/// One re-login and one retry for a request the backend refused with 401. `None` when there is
+/// no stored session to repair or the repair is not possible.
+async fn retry_after_unauthorized(
+    state: &MediaServices,
+    prepared: &PreparedForward,
+) -> Result<Option<reqwest::Response>, ApplicationError> {
+    let target = &prepared.target;
+    let Some(session) = target.session() else {
+        return Ok(None);
+    };
+    let Some(new_token) = state
+        .session_recovery
+        .recover(
+            &state.user_authorization,
+            session,
+            target.server(),
+            &session.jellyfin_token,
+        )
+        .await
+    else {
+        return Ok(None);
+    };
+    let mut retry = build_upstream_request(state, prepared).await?;
+    crate::application::session_recovery::swap_token(
+        &mut retry,
+        &session.jellyfin_token,
+        &new_token,
+    );
+    state
+        .reqwest_client
+        .execute(retry)
+        .await
+        .map(Some)
+        .map_err(|error| ApplicationError::UpstreamTransport(error.without_url()))
+}
+
 async fn build_upstream_request(
     state: &MediaServices,
     prepared: &PreparedForward,

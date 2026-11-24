@@ -182,6 +182,15 @@ Know these before touching the areas; each has tests under `src/http_tests/` or 
   (`auth/service/users.rs`, called from `startup/bootstrap.rs`) from `JELLYSWARRM_USERNAME` / `_PASSWORD`; after that
   the database owns the password. Management-UI login authenticates database users only (`ui/auth`). The admin
   cannot be deleted. `auto_create_users_on_login` is `false` by default; federation is hidden/off (code kept).
+- **Device tokens, as in Jellyfin** (`client_devices`, migration `20261124000000`; `auth/service/client_devices.rs`,
+  `application/session_recovery.rs`): a login creates/replaces the row of (user, device id) and returns **its own token**
+  (the per-user `virtual_key` is no longer a credential); requests resolve user and device **from the token**
+  (`get_caller_by_token`, `get_device_sessions`), never by comparing headers. Backend sessions belong to the device row
+  and are logged in with a proxy-owned device id (`backend_device_id`). A 401 from a backend for a stored token is repaired
+  once by `MediaServices::with_recovery` (single flight per session). Jellyfin facts this relies on (verified on 12.4.0):
+  a new login of the same (user, DeviceId) revokes the old token; the token alone identifies the caller (any `DeviceId`
+  header works); a `userId` of another user is 403; `POST /Sessions/Logout` revokes. Tests: `http_tests/session_recovery.rs`
+  models a Jellyfin-like backend. In unit tests, tokens are deterministic: `auth::service::test_token(user_id, device_id)`.
 - **Server panels / pass-through** (`ui/backend_passthrough.rs`, `ui/backend_identity.rs`): `/ui/backend/{id}/…`
   proxies a server's own web client, signed in with the mapped account (`PanelIdentities`), or in "manual" mode for
   a server with no mapped account (first-run setup wizard). The start page gets a script injected that isolates

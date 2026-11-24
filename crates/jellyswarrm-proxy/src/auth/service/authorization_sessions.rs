@@ -1,6 +1,37 @@
 //! Persist, encrypt, rebind, and revoke backend authorization sessions.
 use super::*;
 
+const SESSIONS_SELECT: &str = r#"
+    SELECT
+        auth.id as auth_id,
+        auth.user_id as auth_user_id,
+        auth.mapping_id as auth_mapping_id,
+        sm.server_url as auth_server_url,
+        auth.client,
+        auth.device,
+        auth.device_id,
+        auth.version,
+        auth.jellyfin_token,
+        auth.token_format,
+        auth.original_user_id,
+        auth.expires_at,
+        auth.created_at as auth_created_at,
+        auth.updated_at as auth_updated_at,
+
+        s.id as server_id,
+        s.name as server_name,
+        s.url as server_url_full,
+        s.priority,
+        s.media_streaming_mode,
+        s.created_at as server_created_at,
+        s.updated_at as server_updated_at
+    FROM authorization_sessions auth
+    JOIN server_mappings sm ON auth.mapping_id = sm.id
+    JOIN servers s ON sm.server_id = s.id"#;
+
+const SESSIONS_FILTER: &str =
+    "AND (auth.expires_at IS NULL OR auth.expires_at > ?) ORDER BY s.priority DESC, s.name ASC";
+
 impl UserAuthorizationService {
     /// Encrypt old session tokens before accepting requests. Legacy rows cannot
     /// be left in the DB indefinitely: a Quick Connect session holds the same
@@ -118,12 +149,17 @@ impl UserAuthorizationService {
             .await?
             .ok_or(sqlx::Error::RowNotFound)?;
 
+        // The session belongs to the device row of this user and device id (created here if the
+        // device did not go through the regular login).
+        let client_device = self.device_for_session(user_id, authorization).await?;
+
         let session_id = sqlx::query_scalar::<_, i64>(
             r#"
             INSERT INTO authorization_sessions
-            (user_id, mapping_id, server_url, client, device, device_id, version, jellyfin_token, token_format, original_user_id, expires_at, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (user_id, mapping_id, server_url, client, device, device_id, version, jellyfin_token, token_format, original_user_id, expires_at, created_at, updated_at, client_device_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(user_id, mapping_id, device_id) DO UPDATE SET
+                client_device_id = excluded.client_device_id,
                 server_url = excluded.server_url,
                 client = excluded.client,
                 device = excluded.device,
@@ -149,6 +185,7 @@ impl UserAuthorizationService {
         .bind(expires_at)
         .bind(now)
         .bind(now)
+        .bind(client_device.id)
         .fetch_one(&self.pool)
         .await?;
 
@@ -172,84 +209,22 @@ impl UserAuthorizationService {
         Ok(Some((user, sessions)))
     }
 
-    /// Get authorization sessions and servers for a user by proxy token.
-    #[cfg(test)]
-    pub(crate) async fn get_user_sessions_by_virtual_token(
-        &self,
-        virtual_token: &str,
-    ) -> Result<Option<(LocalUser, Vec<(AuthorizationSession, Server)>)>, sqlx::Error> {
-        let user = match self.get_user_by_token(virtual_token).await? {
-            Some(user) => user,
-            None => return Ok(None),
-        };
-
-        let sessions = self.get_user_sessions(&user.id, None).await?;
-        Ok(Some((user, sessions)))
-    }
-
-    ///Get authorization sessions with servers for a user
+    /// Every non-expired session of a user, across all devices, with its server.
+    /// `device` (legacy header matching) narrows the list; the per-device lookup below is the
+    /// way requests find their sessions.
     pub(crate) async fn get_user_sessions(
         &self,
         user_id: &str,
         device: Option<Device>,
     ) -> Result<Vec<(AuthorizationSession, Server)>, sqlx::Error> {
-        let query = String::from(
-            r#"
-    SELECT
-        auth.id as auth_id,
-        auth.user_id as auth_user_id,
-        auth.mapping_id as auth_mapping_id,
-        sm.server_url as auth_server_url,
-        auth.client,
-        auth.device,
-        auth.device_id,
-        auth.version,
-        auth.jellyfin_token,
-        auth.token_format,
-        auth.original_user_id,
-        auth.expires_at,
-        auth.created_at as auth_created_at,
-        auth.updated_at as auth_updated_at,
-
-        s.id as server_id,
-        s.name as server_name,
-        s.url as server_url_full,
-        s.priority,
-        s.media_streaming_mode,
-        s.created_at as server_created_at,
-        s.updated_at as server_updated_at
-    FROM authorization_sessions auth
-    JOIN server_mappings sm ON auth.mapping_id = sm.id
-    JOIN servers s ON sm.server_id = s.id
-    WHERE auth.user_id = ?
-    AND (auth.expires_at IS NULL OR auth.expires_at > ?)
-    ORDER BY s.priority DESC, s.name ASC
-"#,
-        );
-
-        let rows = sqlx::query(&query)
-            .bind(user_id)
-            .bind(chrono::Utc::now())
-            .fetch_all(&self.pool)
-            .await?;
-
-        let sessions: Vec<(AuthorizationSession, Server)> = rows
-            .into_iter()
-            .map(|row| {
-                let mut session = AuthorizationSession::from_user_sessions_row(&row)?;
-                if row.try_get::<String, _>("token_format")? == "session_v1" {
-                    let key = self.session_key.as_ref().ok_or_else(|| {
-                        sqlx::Error::Protocol("session encryption key unavailable".into())
-                    })?;
-                    session.jellyfin_token = key
-                        .decrypt(&EncryptedPassword::from_raw(session.jellyfin_token))
-                        .map_err(|e| sqlx::Error::Protocol(e.to_string()))?
-                        .into_inner();
-                }
-                Ok((session, Server::from_session_join_row(&row)?))
-            })
-            .collect::<Result<_, sqlx::Error>>()?;
-
+        let rows = sqlx::query(&format!(
+            "{SESSIONS_SELECT} WHERE auth.user_id = ? {SESSIONS_FILTER}"
+        ))
+        .bind(user_id)
+        .bind(chrono::Utc::now())
+        .fetch_all(&self.pool)
+        .await?;
+        let sessions = self.decode_session_rows(rows)?;
         debug!("Found {} sessions for user_id: {}", sessions.len(), user_id);
 
         let sessions = if let Some(device) = device {
@@ -265,185 +240,62 @@ impl UserAuthorizationService {
         Ok(sessions)
     }
 
-    /// Resolve abbreviated authenticated headers without weakening normal device matching.
-    pub(crate) async fn get_user_sessions_for_partial_device(
+    /// The sessions of one device row: what a request authenticated by that device's token may
+    /// use. No header strings are compared.
+    pub(crate) async fn get_device_sessions(
         &self,
-        user_id: &str,
-        device: Option<&Device>,
+        client_device_id: i64,
     ) -> Result<Vec<(AuthorizationSession, Server)>, sqlx::Error> {
-        let sessions = self.get_user_sessions(user_id, None).await?;
-        let Some(device) = device.filter(|d| !d.device_id.is_empty()) else {
-            return Ok(sessions);
-        };
-        if !Device::has_known_device_id(&normalize_device(&device.device_id)) {
-            return Ok(Vec::new());
-        }
-        Ok(sessions
-            .into_iter()
-            .filter(|(session, _)| {
-                session.device.device_id == device.device_id
-                    && (device.client.is_empty()
-                        || normalize_device(&session.device.client)
-                            == normalize_device(&device.client))
-            })
-            .collect())
+        let rows = sqlx::query(&format!(
+            "{SESSIONS_SELECT} WHERE auth.client_device_id = ? {SESSIONS_FILTER}"
+        ))
+        .bind(client_device_id)
+        .bind(chrono::Utc::now())
+        .fetch_all(&self.pool)
+        .await?;
+        self.decode_session_rows(rows)
     }
 
-    /// Rebind Android TV authorization sessions to a new device ID when the client rotates
-    /// from username-derived to user-id-derived device IDs after login.
-    ///
-    /// This is intentionally scoped to Android TV clients and is only meant for a one-time
-    /// reconciliation path when strict device matching would otherwise miss existing sessions.
-    pub(crate) async fn rebind_android_tv_device_sessions_if_needed(
+    /// The stored session of `server` that holds this backend token, if any. Tokens are encrypted
+    /// at rest, so the sessions of the server are decrypted and compared (a handful of rows).
+    pub(crate) async fn find_session_by_backend_token(
         &self,
-        user_id: &str,
-        incoming_device: &Device,
-    ) -> Result<bool, sqlx::Error> {
-        if !is_android_tv_client(&incoming_device.client) {
-            return Ok(false);
-        }
+        server_id: ServerId,
+        token: &str,
+    ) -> Result<Option<AuthorizationSession>, sqlx::Error> {
+        let rows = sqlx::query(&format!(
+            "{SESSIONS_SELECT} WHERE s.id = ? {SESSIONS_FILTER}"
+        ))
+        .bind(server_id.as_i64())
+        .bind(chrono::Utc::now())
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(self
+            .decode_session_rows(rows)?
+            .into_iter()
+            .map(|(session, _)| session)
+            .find(|session| session.jellyfin_token == token))
+    }
 
-        let incoming_device_id = normalize_device(&incoming_device.device_id);
-        if !Device::has_known_device_id(&incoming_device_id) {
-            return Ok(false);
-        }
-
-        let incoming_client = normalize_device(&incoming_device.client);
-        let incoming_name = normalize_device(&incoming_device.device);
-        if incoming_name.is_empty() {
-            return Ok(false);
-        }
-
-        let sessions = self.get_user_sessions(user_id, None).await?;
-
-        let mut stale_sessions_by_mapping: std::collections::BTreeMap<
-            i64,
-            Vec<AuthorizationSession>,
-        > = std::collections::BTreeMap::new();
-        let mut incoming_session_exists_by_mapping = std::collections::BTreeSet::new();
-
-        for (session, _) in sessions {
-            let session_device_id = normalize_device(&session.device.device_id);
-            if !Device::has_known_device_id(&session_device_id) {
-                continue;
-            }
-
-            // The key is (user, mapping, device id): a session that already owns the incoming
-            // device id counts whatever client or device name it was stored under (an app update
-            // can rename the client). Otherwise a stale session would be renamed onto that id
-            // and violate the UNIQUE constraint.
-            if session_device_id == incoming_device_id {
-                incoming_session_exists_by_mapping.insert(session.mapping_id);
-                continue;
-            }
-
-            let session_client = normalize_device(&session.device.client);
-            let session_name = normalize_device(&session.device.device);
-            if session_client != incoming_client || session_name != incoming_name {
-                continue;
-            }
-
-            stale_sessions_by_mapping
-                .entry(session.mapping_id)
-                .or_default()
-                .push(session);
-        }
-
-        if stale_sessions_by_mapping.is_empty() {
-            return Ok(false);
-        }
-
-        let collapsed_device_ids = stale_sessions_by_mapping
-            .iter()
-            .map(|(mapping_id, sessions)| {
-                let mut ids = sessions
-                    .iter()
-                    .map(|session| session.device.device_id.clone())
-                    .collect::<Vec<_>>();
-                ids.sort();
-                ids.dedup();
-                format!("mapping {}: {}", mapping_id, ids.join(", "))
-            })
-            .collect::<Vec<_>>();
-
-        warn!(
-            "Collapsing Android TV device IDs for user {} on device '{}' (client '{}') to '{}': {}",
-            user_id,
-            incoming_device.device,
-            incoming_device.client,
-            incoming_device.device_id,
-            collapsed_device_ids.join("; ")
-        );
-
-        let now = chrono::Utc::now();
-
-        let mut tx = self.pool.begin().await?;
-
-        let mut changed = false;
-
-        for (mapping_id, mut stale_sessions) in stale_sessions_by_mapping {
-            stale_sessions.sort_by(|left, right| {
-                left.updated_at
-                    .cmp(&right.updated_at)
-                    .then(left.created_at.cmp(&right.created_at))
-                    .then(left.id.cmp(&right.id))
-            });
-
-            if incoming_session_exists_by_mapping.contains(&mapping_id) {
-                for session in stale_sessions {
-                    let deleted = sqlx::query(
-                        r#"
-                        DELETE FROM authorization_sessions
-                        WHERE id = ?
-                        "#,
-                    )
-                    .bind(session.id)
-                    .execute(&mut *tx)
-                    .await?;
-
-                    changed |= deleted.rows_affected() > 0;
+    fn decode_session_rows(
+        &self,
+        rows: Vec<sqlx::sqlite::SqliteRow>,
+    ) -> Result<Vec<(AuthorizationSession, Server)>, sqlx::Error> {
+        rows.into_iter()
+            .map(|row| {
+                let mut session = AuthorizationSession::from_user_sessions_row(&row)?;
+                if row.try_get::<String, _>("token_format")? == "session_v1" {
+                    let key = self.session_key.as_ref().ok_or_else(|| {
+                        sqlx::Error::Protocol("session encryption key unavailable".into())
+                    })?;
+                    session.jellyfin_token = key
+                        .decrypt(&EncryptedPassword::from_raw(session.jellyfin_token))
+                        .map_err(|e| sqlx::Error::Protocol(e.to_string()))?
+                        .into_inner();
                 }
-
-                continue;
-            }
-
-            let Some(canonical_session) = stale_sessions.pop() else {
-                continue;
-            };
-
-            let updated = sqlx::query(
-                r#"
-                UPDATE authorization_sessions
-                SET device_id = ?, updated_at = ?
-                WHERE id = ?
-                "#,
-            )
-            .bind(&incoming_device.device_id)
-            .bind(now)
-            .bind(canonical_session.id)
-            .execute(&mut *tx)
-            .await?;
-
-            changed |= updated.rows_affected() > 0;
-
-            for session in stale_sessions {
-                let deleted = sqlx::query(
-                    r#"
-                    DELETE FROM authorization_sessions
-                    WHERE id = ?
-                    "#,
-                )
-                .bind(session.id)
-                .execute(&mut *tx)
-                .await?;
-
-                changed |= deleted.rows_affected() > 0;
-            }
-        }
-
-        tx.commit().await?;
-
-        Ok(changed)
+                Ok((session, Server::from_session_join_row(&row)?))
+            })
+            .collect()
     }
 
     /// Get counts of authorization sessions per server for a user.

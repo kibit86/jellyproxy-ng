@@ -39,6 +39,8 @@ pub(crate) struct MediaServices {
     pub(crate) client_sessions: Arc<ClientSessionService>,
     pub(crate) catalog_snapshots: Arc<CatalogSnapshots>,
     pub(crate) admin_rights: Arc<super::admin_rights::AdminRights>,
+    /// Logs a device in again on a backend that refused its stored token.
+    pub(crate) session_recovery: Arc<super::session_recovery::SessionRecovery>,
     /// Fixed at startup, like the router mount it mirrors.
     pub(crate) url_prefix: Option<String>,
 }
@@ -129,6 +131,44 @@ impl MediaServices {
         });
     }
 
+    /// Run `execute` on `request`; if the backend answers 401 for the stored session token the
+    /// request carried, log that device in again once and run it once more with the new token.
+    /// Any other outcome, and a 401 that cannot be repaired, is returned as is.
+    pub(crate) async fn with_recovery<T, F, Fut>(
+        &self,
+        server: &Server,
+        request: reqwest::Request,
+        execute: F,
+    ) -> Result<T, ApplicationError>
+    where
+        F: Fn(reqwest::Request) -> Fut,
+        Fut: std::future::Future<Output = Result<T, ApplicationError>>,
+    {
+        let spare = request.try_clone();
+        let first = execute(request).await;
+        let (
+            Err(ApplicationError::UpstreamStatus(hyper::StatusCode::UNAUTHORIZED)),
+            Some(mut again),
+        ) = (&first, spare)
+        else {
+            return first;
+        };
+        let Some(stale) = super::session_recovery::request_token(&again) else {
+            return first;
+        };
+        match self
+            .session_recovery
+            .recover_by_token(&self.user_authorization, server, &stale)
+            .await
+        {
+            Some(new_token) => {
+                super::session_recovery::swap_token(&mut again, &stale, &new_token);
+                execute(again).await
+            }
+            None => first,
+        }
+    }
+
     pub(crate) async fn execute_processed_json(
         &self,
         request: reqwest::Request,
@@ -136,7 +176,12 @@ impl MediaServices {
         profile: ResponseProcessingProfile,
         token: Option<&str>,
     ) -> Result<serde_json::Value, ApplicationError> {
-        let mut payload = response::execute_json_request(&self.reqwest_client, request).await?;
+        let mut payload = self
+            .with_recovery(server, request, |request| async {
+                response::execute_json_request::<serde_json::Value>(&self.reqwest_client, request)
+                    .await
+            })
+            .await?;
         self.process_response_json(&mut payload, server, profile, token)
             .await?;
         Ok(payload)

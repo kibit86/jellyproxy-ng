@@ -59,7 +59,18 @@ async fn production_authentication_wiring_logs_in_with_encrypted_mappings_and_re
         .unwrap();
     assert_eq!(login.status(), StatusCode::OK);
     let login: Value = login.json().await.unwrap();
-    assert_eq!(login["AccessToken"], f.user.virtual_key);
+    // The login returns the token of the device that logged in, not a per-user key.
+    let issued = login["AccessToken"].as_str().unwrap();
+    assert_ne!(issued, f.token());
+    let (resolved, device) = f
+        .state
+        .user_authorization
+        .get_caller_by_token(issued)
+        .await
+        .unwrap()
+        .expect("the returned token resolves");
+    assert_eq!(resolved.id, f.user.id);
+    assert_eq!(device.unwrap().device_id, "production-login");
     assert_eq!(login["User"]["Id"], f.user.id.as_str());
     assert_eq!(login["User"]["Name"], "alice");
 
@@ -114,12 +125,19 @@ async fn production_authentication_wiring_logs_in_with_encrypted_mappings_and_re
 
     // Ordinary authenticated HTTP now uses the stored backend token. The login
     // mocks' exact counts ensure that this request never re-authenticates.
-    let me = f
-        .request(
-            reqwest::Method::GET,
-            "/Users/Me",
-            &f.user,
-            "production-login",
+    // The next request carries the token the login returned.
+    let me = reqwest::Client::new()
+        .get(format!("{}/Users/Me", f.url))
+        .header(
+            "Authorization",
+            Authorization {
+                client: "Test".into(),
+                device: "Device production-login".into(),
+                device_id: "production-login".into(),
+                version: "1".into(),
+                token: Some(issued.to_owned()),
+            }
+            .to_header_value(),
         )
         .send()
         .await

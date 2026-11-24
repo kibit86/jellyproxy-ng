@@ -158,9 +158,27 @@ impl SessionOperations {
             .ok_or(SessionOperationError::NotFound)
     }
 
+    /// Log the caller's device out: its token stops working and its backend sessions are deleted
+    /// with it (as `POST /Sessions/Logout` does on Jellyfin). A read-only API key has no device.
     pub(crate) async fn logout(&self, caller: &SessionCaller) {
+        let token = self
+            .sessions
+            .get(&caller.session_id)
+            .await
+            .map(|session| session.token().to_owned());
         self.groups.end_session(&caller.session_id).await;
         self.sessions.remove(&caller.session_id).await;
+        if let Some(token) = token {
+            match self.authorization.find_device_by_token(&token).await {
+                Ok(Some((_, device))) => {
+                    if let Err(error) = self.authorization.delete_device(device.id).await {
+                        tracing::warn!("Could not delete the logged-out device: {error}");
+                    }
+                }
+                Ok(None) => {}
+                Err(error) => tracing::warn!("Could not look up the logged-out device: {error}"),
+            }
+        }
     }
 
     pub(crate) async fn viewing(

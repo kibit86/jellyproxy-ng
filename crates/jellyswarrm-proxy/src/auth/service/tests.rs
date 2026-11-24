@@ -1514,7 +1514,7 @@ async fn test_get_user_sessions_by_virtual_token() {
 
     // Test getting user sessions by virtual token
     let user_sessions = service
-        .get_user_sessions_by_virtual_token(&user.virtual_key)
+        .get_user_sessions_by_user_id(&user.id)
         .await
         .unwrap()
         .unwrap();
@@ -1639,7 +1639,7 @@ async fn test_multiple_servers_with_priority() {
 
     // Test getting all authorization sessions for the user
     let user_sessions = service
-        .get_user_sessions_by_virtual_token(&user.virtual_key)
+        .get_user_sessions_by_user_id(&user.id)
         .await
         .unwrap()
         .unwrap();
@@ -1700,7 +1700,7 @@ async fn test_cascade_delete_sessions_on_mapping_delete() {
 
     // Pre-check session exists
     let sessions_before = service
-        .get_user_sessions_by_virtual_token(&user.virtual_key)
+        .get_user_sessions_by_user_id(&user.id)
         .await
         .unwrap()
         .unwrap()
@@ -1713,7 +1713,7 @@ async fn test_cascade_delete_sessions_on_mapping_delete() {
 
     // Session should now be gone
     let sessions_after = service
-        .get_user_sessions_by_virtual_token(&user.virtual_key)
+        .get_user_sessions_by_user_id(&user.id)
         .await
         .unwrap()
         .unwrap()
@@ -1778,7 +1778,7 @@ async fn test_delete_all_sessions_for_user() {
 
     // Verify 2 sessions exist
     let sessions_before = service
-        .get_user_sessions_by_virtual_token(&user.virtual_key)
+        .get_user_sessions_by_user_id(&user.id)
         .await
         .unwrap()
         .unwrap()
@@ -1793,7 +1793,7 @@ async fn test_delete_all_sessions_for_user() {
     assert_eq!(deleted_count, 2);
 
     let sessions_after = service
-        .get_user_sessions_by_virtual_token(&user.virtual_key)
+        .get_user_sessions_by_user_id(&user.id)
         .await
         .unwrap()
         .unwrap()
@@ -1865,7 +1865,7 @@ async fn test_add_server_mapping_upsert_preserves_mapping_id_and_sessions() {
 
     // Ensure first session is still present after mapping update
     let sessions_after_update = service
-        .get_user_sessions_by_virtual_token(&user.virtual_key)
+        .get_user_sessions_by_user_id(&user.id)
         .await
         .unwrap()
         .unwrap()
@@ -1898,7 +1898,7 @@ async fn test_add_server_mapping_upsert_preserves_mapping_id_and_sessions() {
         .unwrap();
 
     let final_sessions = service
-        .get_user_sessions_by_virtual_token(&user.virtual_key)
+        .get_user_sessions_by_user_id(&user.id)
         .await
         .unwrap()
         .unwrap()
@@ -1949,7 +1949,7 @@ async fn test_add_server_mapping_username_change_deletes_sessions() {
         .unwrap();
 
     let sessions_before = service
-        .get_user_sessions_by_virtual_token(&user.virtual_key)
+        .get_user_sessions_by_user_id(&user.id)
         .await
         .unwrap()
         .unwrap()
@@ -1969,7 +1969,7 @@ async fn test_add_server_mapping_username_change_deletes_sessions() {
         .unwrap();
 
     let sessions_after = service
-        .get_user_sessions_by_virtual_token(&user.virtual_key)
+        .get_user_sessions_by_user_id(&user.id)
         .await
         .unwrap()
         .unwrap()
@@ -2031,7 +2031,7 @@ async fn test_add_server_mapping_password_change_deletes_sessions() {
         .unwrap();
 
     let sessions_after = service
-        .get_user_sessions_by_virtual_token(&user.virtual_key)
+        .get_user_sessions_by_user_id(&user.id)
         .await
         .unwrap()
         .unwrap()
@@ -2377,4 +2377,21 @@ async fn deleting_a_device_removes_its_token_and_sessions() {
         .await
         .unwrap()
         .is_empty());
+}
+
+#[tokio::test]
+async fn a_read_only_api_key_resolves_to_its_user_without_a_device() {
+    let (pool, service) = setup_service().await;
+    let user = user_with_server_mapping(&pool, &service, "alice").await;
+    let key = service
+        .create_api_key(&user.id, "kodi")
+        .await
+        .expect("api key");
+    let (found, device) = service
+        .get_caller_by_token(&key.access_token)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(found.id, user.id);
+    assert!(device.is_none(), "an API key is not a device");
 }

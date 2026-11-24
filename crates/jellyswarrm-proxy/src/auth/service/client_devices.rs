@@ -104,7 +104,12 @@ impl UserAuthorizationService {
         authorization: &Authorization,
     ) -> Result<ClientDevice, sqlx::Error> {
         let now = Utc::now();
+        // No one holds the token of a row created this way (it never went through a login). Tests
+        // build requests synchronously, so there the token is the deterministic `test_token`.
+        #[cfg(not(test))]
         let unusable = token_hash(&format!("unusable-{}", uuid::Uuid::new_v4()));
+        #[cfg(test)]
+        let unusable = token_hash(&test_token(user_id, &authorization.device_id));
         let row = sqlx::query(
             r#"
             INSERT INTO client_devices

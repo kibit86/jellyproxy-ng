@@ -434,7 +434,18 @@ mod tests {
             .unwrap();
         let retry = quick_connect.begin_redemption(&secret).unwrap();
         let response = redeem(&state, retry, Some(client)).await.unwrap();
-        assert_eq!(response.access_token, user.virtual_key);
+        assert_ne!(
+            response.access_token, user.virtual_key,
+            "not the per-user key any more"
+        );
+        let (resolved, device) = state
+            .user_authorization
+            .get_caller_by_token(&response.access_token)
+            .await
+            .unwrap()
+            .expect("the returned token is a device token");
+        assert_eq!(resolved.id, user.id);
+        assert!(device.is_some());
         assert!(matches!(
             quick_connect.begin_redemption(&secret),
             Err(RedemptionError::NotFound)

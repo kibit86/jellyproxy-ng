@@ -60,9 +60,11 @@ async fn quick_connect(f: &Fixture) -> (String, String) {
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let initiation: Value = response.json().await.unwrap();
+    // The approver is a logged-in device of this user.
+    let approver = f.device_token(&user, "approver").await;
     let response = client
         .post(format!("{}/QuickConnect/Authorize", f.url))
-        .header("X-MediaBrowser-Token", f.token())
+        .header("X-MediaBrowser-Token", &approver)
         .query(&[("code", initiation["Code"].as_str().unwrap())])
         .send()
         .await
@@ -80,7 +82,7 @@ async fn quick_connect(f: &Fixture) -> (String, String) {
     assert_eq!(authentication["User"]["Id"], user.id.as_str());
     // The Kodi device gets its own token, not the approver's and not a per-user key.
     let kodi_token = authentication["AccessToken"].as_str().unwrap().to_owned();
-    assert_ne!(kodi_token, f.token());
+    assert_ne!(kodi_token, approver);
     assert_ne!(kodi_token, user.virtual_key);
     (
         format!("{CLIENT}, UserId={}, Token={}", user.id, kodi_token),
@@ -208,22 +210,38 @@ async fn kodi_placeholder_device_cannot_borrow_another_users_sessions_or_ignore_
     let (authorization, user) = quick_connect(&f).await;
     let token = Authorization::parse(&authorization).unwrap().token.unwrap();
     let client = reqwest::Client::new();
+    // The token alone says which device is calling and so which sessions are usable, as in
+    // Jellyfin: a placeholder DeviceId, or a different real one, only describes the client.
+    for device_id in ["Unknown%20Device%20id", "different-real-device"] {
+        let before = f.upstreams[1].received_requests().await.unwrap().len();
+        let response = client
+            .get(format!("{}/Users/{user}/Items/{}", f.url, f.items[1]))
+            .header(
+                "Authorization",
+                format!("MediaBrowser DeviceId={device_id}, Token={token}"),
+            )
+            .send()
+            .await
+            .unwrap();
+        assert_ne!(
+            response.status(),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "{device_id}"
+        );
+        let received = f.upstreams[1].received_requests().await.unwrap();
+        assert_eq!(received.len(), before + 1, "{device_id}");
+        let used = received
+            .last()
+            .unwrap()
+            .headers
+            .get("authorization")
+            .unwrap();
+        assert!(
+            used.to_str().unwrap().contains("kodi-backend-token"),
+            "the Kodi device's own backend session is used: {device_id}"
+        );
+    }
     let before = f.upstreams[1].received_requests().await.unwrap().len();
-    // Keep the abbreviated-header lookup strict even for a placeholder ID.
-    let response = client
-        .get(format!("{}/Users/{user}/Items/{}", f.url, f.items[1]))
-        .header(
-            "Authorization",
-            format!("MediaBrowser DeviceId=Unknown%20Device%20id, Token={token}"),
-        )
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(
-        f.upstreams[1].received_requests().await.unwrap().len(),
-        before
-    );
     // Unrecognized/absent credentials retain backend passthrough behavior, but
     // must never be upgraded to the real user's stored backend credentials.
     Mock::given(method("GET"))
@@ -239,11 +257,6 @@ async fn kodi_placeholder_device_cannot_borrow_another_users_sessions_or_ignore_
         .mount(&f.upstreams[1])
         .await;
     for (device_id, token, expected) in [
-        (
-            "different-real-device",
-            token.as_str(),
-            StatusCode::SERVICE_UNAVAILABLE,
-        ),
         (
             "Unknown%20Device%20id",
             f.other_token().as_str(),

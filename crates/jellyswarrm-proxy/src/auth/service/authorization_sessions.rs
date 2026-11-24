@@ -209,21 +209,6 @@ impl UserAuthorizationService {
         Ok(Some((user, sessions)))
     }
 
-    /// Get authorization sessions and servers for a user by proxy token.
-    #[cfg(test)]
-    pub(crate) async fn get_user_sessions_by_virtual_token(
-        &self,
-        virtual_token: &str,
-    ) -> Result<Option<(LocalUser, Vec<(AuthorizationSession, Server)>)>, sqlx::Error> {
-        let user = match self.get_user_by_token(virtual_token).await? {
-            Some(user) => user,
-            None => return Ok(None),
-        };
-
-        let sessions = self.get_user_sessions(&user.id, None).await?;
-        Ok(Some((user, sessions)))
-    }
-
     /// Every non-expired session of a user, across all devices, with its server.
     /// `device` (legacy header matching) narrows the list; the per-device lookup below is the
     /// way requests find their sessions.

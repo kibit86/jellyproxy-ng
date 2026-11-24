@@ -236,12 +236,30 @@ async fn image_request_follows_same_origin_redirects_preserving_authorization() 
     }
 }
 
+/// A user whose `virtual_key` field carries the token of its registered `tv` device, so the
+/// tests can keep passing it as the request credential.
 async fn test_user(state: &MediaServices, name: &str) -> LocalUser {
-    state
+    let mut user = state
         .user_authorization
         .get_or_create_user(name, &"password123".into())
         .await
-        .unwrap()
+        .unwrap();
+    state
+        .user_authorization
+        .register_test_device(
+            &user.id,
+            &crate::protocol::authorization::Authorization {
+                client: "Test".into(),
+                device: "tv".into(),
+                device_id: "tv".into(),
+                version: "1".into(),
+                token: None,
+            },
+        )
+        .await
+        .unwrap();
+    user.virtual_key = crate::auth::service::test_token(&user.id, "tv");
+    user
 }
 
 fn json_post(path: &str, token: &str, body: serde_json::Value) -> Request {

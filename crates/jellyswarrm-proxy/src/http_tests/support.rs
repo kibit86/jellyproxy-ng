@@ -69,6 +69,24 @@ impl Fixture {
     pub(crate) fn token(&self) -> String {
         crate::auth::service::test_token(&self.user.id, "tv")
     }
+    /// Register a device of `user` (without touching its sessions) and return its token.
+    pub(crate) async fn device_token(&self, user: &LocalUser, device_id: &str) -> String {
+        self.state
+            .user_authorization
+            .register_test_device(
+                &user.id,
+                &Authorization {
+                    client: "Test".into(),
+                    device: format!("Device {device_id}"),
+                    device_id: device_id.into(),
+                    version: "1".into(),
+                    token: None,
+                },
+            )
+            .await
+            .unwrap();
+        crate::auth::service::test_token(&user.id, device_id)
+    }
     /// The same for the second fixture user.
     pub(crate) fn other_token(&self) -> String {
         crate::auth::service::test_token(&self.other.id, "tv")

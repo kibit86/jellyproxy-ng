@@ -9,6 +9,37 @@ use axum::{
 use std::sync::Arc;
 use tracing::{error, warn};
 
+/// The value of `Name="..."` inside a Jellyfin `Authorization` header.
+fn header_param<'a>(value: &'a str, name: &str) -> Option<&'a str> {
+    let key = format!("{name}=\"");
+    let start = value.find(&key)? + key.len();
+    let rest = &value[start..];
+    Some(&rest[..rest.find('"')?])
+}
+
+/// Who made the request, for the log: client, device and the last characters of the device id.
+/// The token (and the rest of the header) is never copied.
+fn caller_label(headers: &axum::http::HeaderMap) -> String {
+    let header = ["authorization", "x-emby-authorization"]
+        .iter()
+        .find_map(|name| headers.get(*name).and_then(|value| value.to_str().ok()));
+    let Some(header) = header else {
+        return "no credentials".to_owned();
+    };
+    let cap = |s: &str| s.chars().take(60).collect::<String>();
+    let client = header_param(header, "Client").map_or_else(|| "?".to_owned(), cap);
+    let device = header_param(header, "Device").map_or_else(|| "?".to_owned(), cap);
+    let id_tail = header_param(header, "DeviceId").map_or_else(
+        || "?".to_owned(),
+        |id| {
+            let mut chars: Vec<char> = id.chars().rev().take(8).collect();
+            chars.reverse();
+            chars.into_iter().collect()
+        },
+    );
+    format!("client='{client}' device='{device}' device_id=...{id_tail}")
+}
+
 /// Log every 5xx with the method, the path (never the query: it can hold tokens), the status
 /// and, when a handler returned an `ApplicationError`, why. The access log alone only says
 /// "503, 2 ms", which cannot tell an empty session list from an incomplete catalog.
@@ -16,6 +47,7 @@ use tracing::{error, warn};
 pub(crate) async fn log_server_errors(request: Request, next: Next) -> Response {
     let method = request.method().clone();
     let path = request.uri().path().to_owned();
+    let caller = caller_label(request.headers());
     let response = next.run(request).await;
     let status = response.status();
     if status.is_server_error() && !matches!(path.as_str(), "/health" | "/ready") {
@@ -23,7 +55,7 @@ pub(crate) async fn log_server_errors(request: Request, next: Next) -> Response 
             .extensions()
             .get::<crate::http::error::FailureReason>()
             .map_or("not reported by the handler", |reason| reason.0.as_str());
-        warn!(%method, %path, status = status.as_u16(), reason, "request failed");
+        warn!(%method, %path, status = status.as_u16(), %caller, reason, "request failed");
     }
     response
 }
@@ -125,19 +157,25 @@ mod log_server_errors_tests {
     }
 
     async fn call(uri: &str) -> (axum::http::StatusCode, bool, String) {
+        call_with(uri, &[]).await
+    }
+
+    async fn call_with(
+        uri: &str,
+        headers: &[(&str, &str)],
+    ) -> (axum::http::StatusCode, bool, String) {
         let captured = Captured::default();
         let subscriber = tracing_subscriber::fmt()
             .with_writer(captured.clone())
             .with_ansi(false)
             .finish();
         let _guard = tracing::subscriber::set_default(subscriber);
+        let mut request = axum::http::Request::builder().uri(uri);
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
         let response = app()
-            .oneshot(
-                axum::http::Request::builder()
-                    .uri(uri)
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(request.body(Body::empty()).unwrap())
             .await
             .unwrap();
         let has_reason = response.extensions().get::<FailureReason>().is_some();
@@ -184,5 +222,29 @@ mod log_server_errors_tests {
         let (status, _, log) = call("/ready").await;
         assert_eq!(status, 503);
         assert!(!log.contains("request failed"), "{log}");
+    }
+    #[tokio::test]
+    async fn the_log_names_the_client_and_device_but_never_the_token() {
+        let (status, _, log) = call_with(
+            "/Items",
+            &[(
+                "authorization",
+                "MediaBrowser Client=\"Jellyfin Web\", Device=\"LG Smart TV\", DeviceId=\"TW96aWxs|1794747421727\", Version=\"12.4.0\", Token=\"SECRET-TOKEN\"",
+            )],
+        )
+        .await;
+        assert_eq!(status, 503);
+        assert!(log.contains("client='Jellyfin Web'"), "{log}");
+        assert!(log.contains("device='LG Smart TV'"), "{log}");
+        assert!(log.contains("device_id=...47421727"), "{log}");
+        assert!(!log.contains("SECRET-TOKEN"), "token leaked: {log}");
+        assert!(!log.contains("TW96aWxs"), "whole device id leaked: {log}");
+        assert!(!log.contains("12.4.0"), "{log}");
+    }
+
+    #[tokio::test]
+    async fn a_request_without_credentials_is_logged_as_such() {
+        let (_, _, log) = call("/Items").await;
+        assert!(log.contains("no credentials"), "{log}");
     }
 }

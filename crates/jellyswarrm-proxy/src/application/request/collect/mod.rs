@@ -2,7 +2,7 @@
 //! analyze the JSON body and load the authorized, healthy backend sessions.
 //! Backend *selection* happens later, in `routing`.
 use anyhow::{anyhow, Result};
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 
 use crate::application::accounts::user_for_credential;
 use crate::application::{
@@ -14,7 +14,7 @@ use crate::libraries::service::VirtualLibraryAccessScope;
 use crate::protocol::caller::{request_device, JellyfinAuthorization};
 use crate::protocol::device::{normalize_device, Device};
 use crate::protocol::routes::PlaybackSessionAction;
-use crate::servers::storage::Server;
+use crate::servers::storage::{Server, ServerHealthStatus};
 use crate::translation::analyze_json;
 use crate::translation::request_analyzer::{RequestAnalysisContext, RequestBodyAnalysisResult};
 
@@ -118,6 +118,48 @@ async fn analyze_body(
     Ok(Some(analysis))
 }
 
+/// `client / device / ...tail` of a device, for logs: the last 8 characters of the device id
+/// identify it without printing the whole identifier.
+pub(crate) fn device_label(device: Option<&Device>) -> String {
+    let Some(device) = device else {
+        return "no device in the request".to_owned();
+    };
+    let tail: String = {
+        let mut chars: Vec<char> = device.device_id.chars().rev().take(8).collect();
+        chars.reverse();
+        chars.into_iter().collect()
+    };
+    format!(
+        "client='{}' device='{}' device_id=...{}",
+        device.client, device.device, tail
+    )
+}
+
+/// Why a caller with mapped servers has no usable backend session (see `backend_sessions`).
+/// Never includes tokens: only names, counts and the health-check failure text.
+pub(crate) fn no_usable_session_note(
+    device: Option<&Device>,
+    user_sessions: usize,
+    matched_for_device: usize,
+    mapped_servers: usize,
+    unhealthy: &[String],
+) -> String {
+    let unhealthy = if unhealthy.is_empty() {
+        "none".to_owned()
+    } else {
+        unhealthy
+            .iter()
+            .map(|entry| entry.chars().take(120).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("; ")
+    };
+    format!(
+        "no usable backend session: {}; the user has {user_sessions} session(s), {matched_for_device} match this device, \
+         {mapped_servers} mapped server(s); servers marked unhealthy: {unhealthy}",
+        device_label(device)
+    )
+}
+
 /// Return the caller's healthy backend sessions for this device and the full
 /// mapped access scope. Authorization and availability are distinct: mapped
 /// servers stay in scope even when offline or missing a session for this device.
@@ -195,16 +237,36 @@ async fn backend_sessions(
     let access_scope =
         VirtualLibraryAccessScope::new(&user.id, mapped_servers.iter().map(|server| server.id));
 
+    let matched = sessions.len();
     let mut healthy = Vec::with_capacity(sessions.len());
+    let mut unhealthy = Vec::new();
     for (session, server) in sessions {
-        if state
-            .server_storage
-            .server_status(server.id)
-            .await
-            .is_healthy()
-        {
-            healthy.push((session, server));
+        match state.server_storage.server_status(server.id).await {
+            ServerHealthStatus::Healthy(_) => healthy.push((session, server)),
+            ServerHealthStatus::Unhealthy(reason) => {
+                unhealthy.push(format!("{}: {}", server.name, reason));
+            }
         }
+    }
+    // A caller with mapped servers and no usable session is answered 503 ("selected owner
+    // unavailable") without any upstream call. Say why, once per request: no session for this
+    // device, or the matching ones sit on servers marked unhealthy.
+    if healthy.is_empty() && !mapped_servers.is_empty() {
+        let user_sessions = state
+            .user_authorization
+            .get_user_sessions(&user.id, None)
+            .await
+            .map_or(0, |all| all.len());
+        warn!(
+            "{}",
+            no_usable_session_note(
+                upstream_device.as_ref(),
+                user_sessions,
+                matched,
+                mapped_servers.len(),
+                &unhealthy,
+            )
+        );
     }
     Ok((healthy, access_scope))
 }
@@ -226,4 +288,68 @@ fn body_to_json(request: &reqwest::Request) -> Option<serde_json::Value> {
     serde_json::from_slice(bytes)
         .inspect_err(|error| error!("Failed to parse JSON body: {error}"))
         .ok()
+}
+
+#[cfg(test)]
+mod no_usable_session_note_tests {
+    use super::*;
+
+    fn device(id: &str) -> Device {
+        Device {
+            client: "Jellyfin Web".to_owned(),
+            device: "LG Smart TV".to_owned(),
+            device_id: id.to_owned(),
+            version: "12.4.0".to_owned(),
+        }
+    }
+
+    #[test]
+    fn says_whether_the_device_has_no_session_or_the_servers_are_unhealthy() {
+        let d = device("TW96aWxs|1794747421727");
+        let no_session = no_usable_session_note(Some(&d), 6, 0, 2, &[]);
+        assert!(
+            no_session.contains("6 session(s), 0 match this device"),
+            "{no_session}"
+        );
+        assert!(
+            no_session.contains("client='Jellyfin Web' device='LG Smart TV' device_id=...47421727"),
+            "{no_session}"
+        );
+        assert!(
+            no_session.ends_with("servers marked unhealthy: none"),
+            "{no_session}"
+        );
+
+        let down = no_usable_session_note(
+            Some(&d),
+            6,
+            2,
+            2,
+            &[
+                "Morlupo: Network error".to_owned(),
+                "Texd86: timeout".to_owned(),
+            ],
+        );
+        assert!(down.contains("2 match this device"), "{down}");
+        assert!(
+            down.contains("Morlupo: Network error; Texd86: timeout"),
+            "{down}"
+        );
+    }
+
+    #[test]
+    fn never_prints_the_whole_device_id_and_copes_with_a_missing_device() {
+        let d = device("SECRET-LONG-DEVICE-IDENTIFIER-1234567890");
+        let note = no_usable_session_note(Some(&d), 1, 0, 1, &[]);
+        assert!(note.contains("device_id=...34567890"), "{note}");
+        assert!(!note.contains("SECRET-LONG"), "{note}");
+        assert!(no_usable_session_note(None, 0, 0, 1, &[]).contains("no device in the request"));
+    }
+
+    #[test]
+    fn a_very_long_health_failure_is_truncated() {
+        let long = "x".repeat(500);
+        let note = no_usable_session_note(None, 0, 0, 1, &[long]);
+        assert!(note.len() < 400, "{}", note.len());
+    }
 }

@@ -189,6 +189,48 @@ impl fmt::Display for ApplicationError {
     }
 }
 
+impl ApplicationError {
+    /// One-line description of the failure chain for the server log. Only the workflow's own typed
+    /// layers are spelled out: foreign errors (transport, anyhow, JSON) are named but never printed,
+    /// because they can carry request URLs with tokens in the query string. Unlike `Display`, it
+    /// includes the upstream status (e.g. `403 Forbidden`), which is what a log reader needs.
+    pub(crate) fn failure_summary(&self) -> String {
+        const MAX_SOURCES: usize = 5;
+        match self {
+            Self::At { stage, cause } => format!("{stage:?} -> {}", cause.failure_summary()),
+            Self::Shared(cause) => cause.failure_summary(),
+            Self::SourcesFailed(causes) => {
+                let shown = causes
+                    .iter()
+                    .take(MAX_SOURCES)
+                    .map(Self::failure_summary)
+                    .collect::<Vec<_>>()
+                    .join(" | ");
+                format!("{self} ({} failed: {shown})", causes.len())
+            }
+            Self::IncompleteCatalog { reason, cause } => match cause {
+                Some(cause) => format!("{self} (reason {reason:?}) <- {}", cause.failure_summary()),
+                None => format!("{self} (reason {reason:?})"),
+            },
+            Self::UpstreamStatus(status) => format!("{self}: {status}"),
+            Self::UpstreamTransport(source) => {
+                let kind = if source.is_timeout() {
+                    "timeout"
+                } else if source.is_connect() {
+                    "connect"
+                } else {
+                    "other"
+                };
+                format!("{self} ({kind})")
+            }
+            Self::PlaybackResolution(source) => format!("{self}: {source:?}"),
+            Self::TargetSelection(source) => format!("{self}: {source:?}"),
+            Self::Storage(source) => format!("{self}: {source}"),
+            other => other.to_string(),
+        }
+    }
+}
+
 impl fmt::Debug for ApplicationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(self, f)

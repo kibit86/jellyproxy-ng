@@ -410,7 +410,7 @@ async fn collect_federated_results<T: Send + 'static>(
             }
             Ok((index, Err(e))) => {
                 failures += 1;
-                error!("Federated server request failed: {:?}", e);
+                error!("Federated server request failed: {}", e.failure_summary());
                 if let ApplicationError::IncompleteCatalog { reason, .. } = &e {
                     outcomes[index].outcome = FetchOutcome::Partial(*reason);
                 }
@@ -759,6 +759,10 @@ async fn execute_raw_items_request(
     request: reqwest::Request,
     server: Server,
 ) -> Result<RawServerItems, ApplicationError> {
+    // Method and path only (never the query: it can hold tokens), so a failure says which call
+    // the server refused and with which status.
+    let method = request.method().clone();
+    let path = request.url().path().to_owned();
     let response =
         crate::application::request::response::execute_json_request::<serde_json::Value>(
             &state.reqwest_client,
@@ -766,7 +770,11 @@ async fn execute_raw_items_request(
         )
         .await
         .inspect_err(|e| {
-            error!("Failed to get items from server '{}': {:?}", server.name, e);
+            error!(
+                "Failed to get items from server '{}' ({method} {path}): {}",
+                server.name,
+                e.failure_summary()
+            );
         })?;
 
     let items_response: ItemsResponseVariants = response_json_to_payload(response)?;

@@ -37,45 +37,9 @@ impl IntoResponse for ApplicationError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FailureReason(pub(crate) String);
 
-/// Describe a failure chain in one line for the log. Only the workflow's own typed layers are
-/// spelled out: foreign errors (transport, anyhow, JSON) are named but never printed, because
-/// they can carry request URLs with tokens in the query string.
+/// Describe a failure chain in one line for the log (see `ApplicationError::failure_summary`).
 pub(crate) fn describe_failure(error: &ApplicationError) -> String {
-    const MAX_SOURCES: usize = 5;
-    match error {
-        ApplicationError::At { stage, cause } => {
-            format!("{stage:?} -> {}", describe_failure(cause))
-        }
-        ApplicationError::Shared(cause) => describe_failure(cause),
-        ApplicationError::SourcesFailed(causes) => {
-            let shown = causes
-                .iter()
-                .take(MAX_SOURCES)
-                .map(describe_failure)
-                .collect::<Vec<_>>()
-                .join(" | ");
-            format!("{error} ({} failed: {shown})", causes.len())
-        }
-        ApplicationError::IncompleteCatalog { reason, cause } => match cause {
-            Some(cause) => format!("{error} (reason {reason:?}) <- {}", describe_failure(cause)),
-            None => format!("{error} (reason {reason:?})"),
-        },
-        ApplicationError::UpstreamStatus(status) => format!("{error}: {status}"),
-        ApplicationError::UpstreamTransport(source) => {
-            let kind = if source.is_timeout() {
-                "timeout"
-            } else if source.is_connect() {
-                "connect"
-            } else {
-                "other"
-            };
-            format!("{error} ({kind})")
-        }
-        ApplicationError::PlaybackResolution(source) => format!("{error}: {source:?}"),
-        ApplicationError::TargetSelection(source) => format!("{error}: {source:?}"),
-        ApplicationError::Storage(source) => format!("{error}: {source}"),
-        other => other.to_string(),
-    }
+    error.failure_summary()
 }
 
 /// Only typed, client-actionable causes produce a message; database and

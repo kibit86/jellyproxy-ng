@@ -8,7 +8,7 @@ authors = ["lukaskreussel@gmail.com"]
 edition = "2021"
 rust-version = "1.99"
 repository = "https://github.com/kibit86/jellyproxy-ng"
-version = "1.3.2"
+version = "1.3.3"
 
 [workspace.dependencies]
 

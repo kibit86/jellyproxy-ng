@@ -161,7 +161,30 @@ async fn forward_media_request(
                     timeout,
                 ),
             );
-            delivery::proxy(&context, request)
+            // A 401 for the stored token arrives before any byte is streamed: log the device in
+            // again once and ask again.
+            let spare = request.try_clone();
+            let first = delivery::proxy(&context, request)
+                .await
+                .map_err(ApplicationError::from)?;
+            if first.status != hyper::StatusCode::UNAUTHORIZED {
+                return Ok(first);
+            }
+            let Some(mut again) = spare else {
+                return Ok(first);
+            };
+            let Some(stale) = crate::application::session_recovery::request_token(&again) else {
+                return Ok(first);
+            };
+            let Some(new_token) = state
+                .session_recovery
+                .recover_by_token(&state.user_authorization, server, &stale)
+                .await
+            else {
+                return Ok(first);
+            };
+            crate::application::session_recovery::swap_token(&mut again, &stale, &new_token);
+            delivery::proxy(&context, again)
                 .await
                 .map_err(ApplicationError::from)
         }

@@ -191,11 +191,15 @@ pub(crate) async fn post_playback_info(
     let original_item_id = BackendItemId::from(contains_id(request.url(), "Items").ok_or(
         ApplicationError::InvalidInput("missing upstream playback item"),
     )?);
-    match crate::application::request::response::execute_json_request::<PlaybackResponse>(
-        &state.reqwest_client,
-        request,
-    )
-    .await
+    match state
+        .with_recovery(server, request, |request| async {
+            crate::application::request::response::execute_json_request::<PlaybackResponse>(
+                &state.reqwest_client,
+                request,
+            )
+            .await
+        })
+        .await
     {
         Ok(mut response) => {
             // Preserve the client's intent to use the member's own source.

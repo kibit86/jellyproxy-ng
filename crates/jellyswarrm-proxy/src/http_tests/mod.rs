@@ -48,6 +48,7 @@ mod mutations;
 mod pipeline;
 mod preferences;
 mod resources;
+mod session_recovery;
 mod sessions;
 pub(crate) mod support;
 

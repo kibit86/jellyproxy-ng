@@ -256,6 +256,27 @@ impl UserAuthorizationService {
         self.decode_session_rows(rows)
     }
 
+    /// The stored session of `server` that holds this backend token, if any. Tokens are encrypted
+    /// at rest, so the sessions of the server are decrypted and compared (a handful of rows).
+    pub(crate) async fn find_session_by_backend_token(
+        &self,
+        server_id: ServerId,
+        token: &str,
+    ) -> Result<Option<AuthorizationSession>, sqlx::Error> {
+        let rows = sqlx::query(&format!(
+            "{SESSIONS_SELECT} WHERE s.id = ? {SESSIONS_FILTER}"
+        ))
+        .bind(server_id.as_i64())
+        .bind(chrono::Utc::now())
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(self
+            .decode_session_rows(rows)?
+            .into_iter()
+            .map(|(session, _)| session)
+            .find(|session| session.jellyfin_token == token))
+    }
+
     fn decode_session_rows(
         &self,
         rows: Vec<sqlx::sqlite::SqliteRow>,

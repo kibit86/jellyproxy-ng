@@ -12,4 +12,5 @@ pub(crate) mod media_services;
 pub(crate) mod playback;
 pub(crate) mod quick_connect;
 pub(crate) mod request;
+pub(crate) mod session_recovery;
 pub(crate) mod syncplay;

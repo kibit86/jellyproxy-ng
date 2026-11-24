@@ -62,7 +62,7 @@ async fn quick_connect(f: &Fixture) -> (String, String) {
     let initiation: Value = response.json().await.unwrap();
     let response = client
         .post(format!("{}/QuickConnect/Authorize", f.url))
-        .header("X-MediaBrowser-Token", &user.virtual_key)
+        .header("X-MediaBrowser-Token", f.token())
         .query(&[("code", initiation["Code"].as_str().unwrap())])
         .send()
         .await
@@ -78,9 +78,12 @@ async fn quick_connect(f: &Fixture) -> (String, String) {
     assert_eq!(response.status(), StatusCode::OK);
     let authentication: Value = response.json().await.unwrap();
     assert_eq!(authentication["User"]["Id"], user.id.as_str());
-    assert_eq!(authentication["AccessToken"], user.virtual_key);
+    // The Kodi device gets its own token, not the approver's and not a per-user key.
+    let kodi_token = authentication["AccessToken"].as_str().unwrap().to_owned();
+    assert_ne!(kodi_token, f.token());
+    assert_ne!(kodi_token, user.virtual_key);
     (
-        format!("{CLIENT}, UserId={}, Token={}", user.id, user.virtual_key),
+        format!("{CLIENT}, UserId={}, Token={}", user.id, kodi_token),
         authentication["User"]["Id"].as_str().unwrap().to_owned(),
     )
 }
@@ -243,7 +246,7 @@ async fn kodi_placeholder_device_cannot_borrow_another_users_sessions_or_ignore_
         ),
         (
             "Unknown%20Device%20id",
-            f.other.virtual_key.as_str(),
+            f.other_token().as_str(),
             StatusCode::FORBIDDEN,
         ),
         (
@@ -290,17 +293,17 @@ async fn placeholder_and_user_agent_devices_use_only_unexpired_token_owner_sessi
     for (header, value) in [
         (
             "Authorization",
-            playback_authorization(&f.user.id, &f.user.virtual_key, "unknown-device-id"),
+            playback_authorization(&f.user.id, &f.token(), "unknown-device-id"),
         ),
         (
             "Authorization",
-            playback_authorization(&f.user.id, &f.user.virtual_key, "n/a"),
+            playback_authorization(&f.user.id, &f.token(), "n/a"),
         ),
         (
             "X-Emby-Authorization",
-            playback_authorization(&f.user.id, &f.user.virtual_key, "Unknown%20Device%20id"),
+            playback_authorization(&f.user.id, &f.token(), "Unknown%20Device%20id"),
         ),
-        ("X-Emby-Token", f.user.virtual_key.clone()),
+        ("X-Emby-Token", f.token().clone()),
     ] {
         let response = client
             .get(format!(
@@ -328,7 +331,7 @@ async fn placeholder_and_user_agent_devices_use_only_unexpired_token_owner_sessi
         ))
         .header(
             "Authorization",
-            playback_authorization(&f.user.id, &f.user.virtual_key, "Unknown%20Device%20id"),
+            playback_authorization(&f.user.id, &f.token(), "Unknown%20Device%20id"),
         )
         .send()
         .await

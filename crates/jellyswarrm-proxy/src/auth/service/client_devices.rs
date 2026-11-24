@@ -204,3 +204,29 @@ impl UserAuthorizationService {
         Ok(result.rows_affected() > 0)
     }
 }
+
+/// Deterministic token of the test fixtures for (user, device id). Tests that build requests
+/// synchronously use it; `register_test_device` makes the proxy accept it.
+#[cfg(test)]
+pub(crate) fn test_token(user_id: &str, device_id: &str) -> String {
+    format!("test-token-{user_id}-{device_id}")
+}
+
+#[cfg(test)]
+impl UserAuthorizationService {
+    /// Register (or re-point) the row of this user and device id so that `test_token` is its
+    /// token. Never deletes the row, so stored backend sessions survive.
+    pub(crate) async fn register_test_device(
+        &self,
+        user_id: &str,
+        authorization: &Authorization,
+    ) -> Result<ClientDevice, sqlx::Error> {
+        let device = self.device_for_session(user_id, authorization).await?;
+        sqlx::query("UPDATE client_devices SET token_hash = ? WHERE id = ?")
+            .bind(token_hash(&test_token(user_id, &authorization.device_id)))
+            .bind(device.id)
+            .execute(&self.pool)
+            .await?;
+        Ok(device)
+    }
+}

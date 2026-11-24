@@ -56,9 +56,23 @@ pub(crate) fn auth(user: &LocalUser, id: &str) -> String {
         device: format!("Device {id}"),
         device_id: id.into(),
         version: "1".into(),
-        token: Some(user.virtual_key.clone()),
+        token: Some(crate::auth::service::test_token(&user.id, id)),
     }
     .to_header_value()
+}
+
+/// Device ids the fixture helpers use for requests (`request`, `post`, `list`, `socket`, ...).
+const FIXTURE_DEVICES: &[&str] = &["tv", "web", "other", "controller", "tv-other", "unknown"];
+
+impl Fixture {
+    /// The token of the fixture user's `tv` device (the one that owns the stored sessions).
+    pub(crate) fn token(&self) -> String {
+        crate::auth::service::test_token(&self.user.id, "tv")
+    }
+    /// The same for the second fixture user.
+    pub(crate) fn other_token(&self) -> String {
+        crate::auth::service::test_token(&self.other.id, "tv")
+    }
 }
 impl Fixture {
     pub(crate) async fn new() -> Self {
@@ -160,6 +174,24 @@ impl Fixture {
             items.push(mapping.virtual_media_id.into_string());
             upstreams.push(upstream);
         }
+        for account in [&user, &other] {
+            for id in FIXTURE_DEVICES {
+                state
+                    .user_authorization
+                    .register_test_device(
+                        &account.id,
+                        &Authorization {
+                            client: "Test".into(),
+                            device: format!("Device {id}"),
+                            device_id: (*id).into(),
+                            version: "1".into(),
+                            token: None,
+                        },
+                    )
+                    .await
+                    .unwrap();
+            }
+        }
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let url = format!("http://{addr}/proxy");
@@ -236,7 +268,7 @@ impl Fixture {
         let url = format!(
             "{}/socket?api_key={}&deviceId={device}",
             self.url.replacen("http", "ws", 1),
-            self.user.virtual_key
+            self.token()
         );
         let (mut ws, _) = connect_async(url).await.unwrap();
         let first: Value =

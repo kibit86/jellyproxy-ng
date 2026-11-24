@@ -253,7 +253,7 @@ async fn delivery(
         assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
         let location = response.headers()["Location"].to_str().unwrap();
         assert!(location.starts_with(&format!("{}/", f.upstreams[owner].uri())));
-        assert!(!location.contains(&f.user.virtual_key));
+        assert!(!location.contains(&f.token()));
         // Follow Location alone: browsers cannot attach rewritten backend auth.
         let mut request = client.get(location);
         if let Some(range) = range {
@@ -469,7 +469,7 @@ async fn media_path_contract(scenario: Scenario, media: Media, mode: MediaStream
         for request in received_without_bookkeeping(upstream).await {
             let identity = format!("{:?} {}", request.headers, request.url);
             assert!(identity.contains(&format!("backend-token-{owner}")));
-            assert!(!identity.contains(&f.user.virtual_key));
+            assert!(!identity.contains(&f.token()));
         }
     }
 }

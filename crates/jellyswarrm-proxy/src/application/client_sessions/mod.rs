@@ -257,6 +257,7 @@ pub(crate) async fn decorate_authentication(
     sessions: &ClientSessionService,
     server_id: &str,
     user: &LocalUser,
+    token: &str,
     auth: &Authorization,
     response: &mut crate::protocol::models::AuthenticateResponse,
 ) {
@@ -266,9 +267,7 @@ pub(crate) async fn decorate_authentication(
         device_id: auth.device_id.clone(),
         version: auth.version.clone(),
     };
-    let id = sessions
-        .ensure(user, &user.virtual_key, Some(&device))
-        .await;
+    let id = sessions.ensure(user, token, Some(&device)).await;
     if let Some(session) = sessions.get(&id).await {
         response.session_info =
             serde_json::from_value(session.dto(server_id, &sessions.connections))

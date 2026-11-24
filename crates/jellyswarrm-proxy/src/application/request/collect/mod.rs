@@ -4,7 +4,7 @@
 use anyhow::{anyhow, Result};
 use tracing::{debug, error, warn};
 
-use crate::application::accounts::user_for_credential;
+use crate::application::accounts::caller_for_credential;
 use crate::application::{
     media_services::MediaServices,
     request::{context::RequestContext, input::OperationRequest},
@@ -12,7 +12,7 @@ use crate::application::{
 use crate::auth::service::{AuthorizationSession, LocalUser};
 use crate::libraries::service::VirtualLibraryAccessScope;
 use crate::protocol::caller::{request_device, JellyfinAuthorization};
-use crate::protocol::device::{normalize_device, Device};
+use crate::protocol::device::Device;
 use crate::protocol::routes::PlaybackSessionAction;
 use crate::servers::storage::{Server, ServerHealthStatus};
 use crate::translation::analyze_json;
@@ -32,7 +32,28 @@ pub(crate) async fn operation(
     let auth = JellyfinAuthorization::from_headers_url(request.headers(), request.url());
     debug!(authorization = ?auth, "Extracted authorization");
     let device = request_device(request.headers(), request.url(), auth.as_ref());
-    let mut user = user_for_credential(auth.as_ref(), &state.user_authorization).await?;
+    let (mut user, client_device) =
+        match caller_for_credential(auth.as_ref(), &state.user_authorization).await? {
+            Some((user, device)) => (Some(user), device),
+            None => (None, None),
+        };
+    if let Some(client_device) = &client_device {
+        // Like Jellyfin: the header may refresh the device's name and version, never its identity.
+        let seen = match &auth {
+            Some(
+                JellyfinAuthorization::Authorization(a)
+                | JellyfinAuthorization::XEmbyAuthorization(a),
+            ) => Some(a),
+            _ => None,
+        };
+        if let Err(error) = state
+            .user_authorization
+            .touch_device(client_device, seen)
+            .await
+        {
+            debug!("Could not refresh device activity: {error}");
+        }
+    }
     if let (Some(user), Some(token)) = (user.as_ref(), auth.as_ref().and_then(|a| a.token_ref())) {
         state
             .client_sessions
@@ -60,7 +81,7 @@ pub(crate) async fn operation(
     let (sessions, access_scope) = match (&auth, &user) {
         (Some(auth), Some(user)) => {
             let (sessions, scope) =
-                backend_sessions(state, &request, auth, user, device.as_ref()).await?;
+                backend_sessions(state, &request, auth, user, client_device.as_ref()).await?;
             (
                 Some(sessions).filter(|sessions| !sessions.is_empty()),
                 Some(scope),
@@ -168,67 +189,30 @@ async fn backend_sessions(
     request: &reqwest::Request,
     auth: &JellyfinAuthorization,
     user: &LocalUser,
-    device: Option<&Device>,
+    client_device: Option<&crate::auth::service::ClientDevice>,
 ) -> Result<(
     Vec<(AuthorizationSession, Server)>,
     VirtualLibraryAccessScope,
 )> {
-    // Query-only DeviceId identifies a local player, but does not include
-    // the client metadata required by upstream Device::matches. Preserve
-    // token-only media delivery's existing lookup across this user's sessions.
-    let upstream_device = auth.get_device(request.headers());
-    let partial = matches!(auth,
-        JellyfinAuthorization::Authorization(a) | JellyfinAuthorization::XEmbyAuthorization(a)
-        if !a.has_complete_metadata());
-    let mut sessions = if partial {
-        state
-            .user_authorization
-            .get_user_sessions_for_partial_device(&user.id, upstream_device.as_ref())
-            .await?
-    } else {
-        state
-            .user_authorization
-            .get_user_sessions(&user.id, upstream_device.clone())
-            .await?
-    };
-
-    // ANDROID TV DEVICE-ID REBIND (intentional behavior):
-    // Android TV can authenticate with a username-derived device ID and then switch to a
-    // user-id-derived device ID on the very next authenticated request. Our normal session
-    // lookup is strict on device ID, so the first request after login may not find a match.
-    // To keep the rest of the pipeline unchanged, we do a one-time Android-TV-only rebind
-    // when strict lookup returns no session, then re-run strict lookup.
-    if sessions.is_empty() && !partial {
-        if let Some(device) = device {
-            let rebound = state
+    // The device is the one the token belongs to, exactly as in Jellyfin: no header string is
+    // compared with a stored one. A read-only API key has no device and may use any of the
+    // user's sessions (token-only media delivery).
+    let sessions = match client_device {
+        Some(device) => {
+            state
                 .user_authorization
-                .rebind_android_tv_device_sessions_if_needed(&user.id, device)
-                .await?;
-            if rebound {
-                sessions = state
-                    .user_authorization
-                    .get_user_sessions(&user.id, Some(device.clone()))
-                    .await?;
-            }
+                .get_device_sessions(device.id)
+                .await?
         }
-    }
-
-    // Kodi's separate playback process sends complete headers with placeholder
-    // device metadata; X-Emby-Token can similarly yield only a User-Agent-derived
-    // device. When neither identifies a real device, use the authenticated token
-    // owner's sessions just like token-only delivery. Never relax a real device
-    // mismatch or the stricter abbreviated-header lookup above.
-    if sessions.is_empty()
-        && !partial
-        && upstream_device.as_ref().is_some_and(|device| {
-            !Device::has_known_device_id(&normalize_device(&device.device_id))
-        })
-    {
-        sessions = state
-            .user_authorization
-            .get_user_sessions(&user.id, None)
-            .await?;
-    }
+        None => {
+            state
+                .user_authorization
+                .get_user_sessions(&user.id, None)
+                .await?
+        }
+    };
+    // Only for the log when the list ends up empty.
+    let upstream_device = auth.get_device(request.headers());
 
     let mapped_servers = state
         .user_authorization

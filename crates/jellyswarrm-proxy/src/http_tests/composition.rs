@@ -59,7 +59,7 @@ async fn production_authentication_wiring_logs_in_with_encrypted_mappings_and_re
         .unwrap();
     assert_eq!(login.status(), StatusCode::OK);
     let login: Value = login.json().await.unwrap();
-    assert_eq!(login["AccessToken"], f.user.virtual_key);
+    assert_eq!(login["AccessToken"], f.token());
     assert_eq!(login["User"]["Id"], f.user.id.as_str());
     assert_eq!(login["User"]["Name"], "alice");
 

@@ -98,14 +98,18 @@ async fn resolve_authorize_user_id(
         StatusCode::BAD_REQUEST
     })?;
 
-    let user = state
-        .get_user_by_virtual_key(&token)
+    // Only a logged-in device may approve (a read-only API key cannot).
+    let (user, device) = state
+        .get_caller_by_token(&token)
         .await
         .map_err(|e| {
-            warn!("Failed to resolve user from virtual token: {}", e);
+            warn!("Failed to resolve user from device token: {}", e);
             StatusCode::INTERNAL_SERVER_ERROR
         })?
         .ok_or(StatusCode::UNAUTHORIZED)?;
+    if device.is_none() {
+        return Err(StatusCode::FORBIDDEN);
+    }
 
     // A userId parameter selects no authority of its own. Approval must always
     // belong to the authenticated caller, never an arbitrary local account.

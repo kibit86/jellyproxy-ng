@@ -161,9 +161,8 @@ pub(crate) async fn resolve_cancellation(
 mod tests {
     use super::*;
     use crate::{
-        config::MediaStreamingMode, domain::ids::ServerId, persistence::MIGRATOR,
-        playback::PlaybackSession, protocol::device::Device,
-        servers::storage::ServerStorageService,
+        domain::ids::ServerId, persistence::MIGRATOR, playback::PlaybackSession,
+        protocol::device::Device, servers::storage::ServerStorageService,
     };
 
     fn binding(server_id: ServerId, original_item_id: &str) -> PlaybackSession {
@@ -199,12 +198,7 @@ mod tests {
         let servers = ServerStorageService::new(pool.clone());
         let media = MediaStorageService::new(pool);
         let id = servers
-            .add_server(
-                "owner",
-                "http://owner.example",
-                100,
-                MediaStreamingMode::Redirect,
-            )
+            .add_server("owner", "http://owner.example", 100)
             .await
             .unwrap();
         let server = servers.get_server_by_id(id).await.unwrap().unwrap();
@@ -246,12 +240,7 @@ mod tests {
             id
         );
         let other_id = servers
-            .add_server(
-                "other",
-                "http://other.example",
-                100,
-                MediaStreamingMode::Redirect,
-            )
+            .add_server("other", "http://other.example", 100)
             .await
             .unwrap();
         let other = servers.get_server_by_id(other_id).await.unwrap().unwrap();

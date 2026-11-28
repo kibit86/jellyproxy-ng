@@ -7,7 +7,7 @@ use crate::test_support::MediaFixture;
 use crate::{
     application::request::context::RequestContext,
     auth::service::AuthorizationSession,
-    config::{AppConfig, MediaStreamingMode},
+    config::AppConfig,
     libraries::service::VirtualLibraryAccessScope,
     media::identity::{MediaAlias, MediaKind, MediaObservation, MediaProvider},
     media::storage::{MediaCatalogSnapshot, MediaVersionSourceObservation},
@@ -97,7 +97,6 @@ async fn fixture() -> Fixture {
                 &format!("Backend {index}"),
                 &upstream.uri(),
                 100 - index as i32,
-                MediaStreamingMode::Redirect,
             )
             .await
             .unwrap();

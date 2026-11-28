@@ -52,7 +52,7 @@ mod session_recovery;
 mod sessions;
 pub(crate) mod support;
 
-use crate::{config::MediaStreamingMode, protocol::authorization::Authorization};
+use crate::protocol::authorization::Authorization;
 use axum::http::StatusCode;
 use serde_json::{json, Value};
 use std::sync::Arc;

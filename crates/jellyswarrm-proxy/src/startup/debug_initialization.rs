@@ -37,11 +37,8 @@ pub(crate) async fn initialize_debug_user(
 #[cfg(test)]
 mod tests {
     use crate::{
-        auth::service::UserAuthorizationService,
-        config::{DebugUser, MediaStreamingMode},
-        domain::security::Password,
-        persistence::MIGRATOR,
-        servers::storage::ServerStorageService,
+        auth::service::UserAuthorizationService, config::DebugUser, domain::security::Password,
+        persistence::MIGRATOR, servers::storage::ServerStorageService,
     };
     use sqlx::SqlitePool;
 
@@ -62,12 +59,7 @@ mod tests {
             ("Movies", "http://localhost:8096"),
             ("Shows", "http://localhost:8097"),
         ] {
-            server_ids.push(
-                server_storage
-                    .add_server(name, url, 100, MediaStreamingMode::Proxy)
-                    .await
-                    .unwrap(),
-            );
+            server_ids.push(server_storage.add_server(name, url, 100).await.unwrap());
         }
 
         (user_authorization, server_storage, server_ids)

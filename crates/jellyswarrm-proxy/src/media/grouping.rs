@@ -402,7 +402,6 @@ mod tests {
     use std::collections::BTreeSet;
 
     use crate::{
-        config::MediaStreamingMode,
         domain::ids::ServerId,
         media::identity::{MediaKind, MediaProvider},
         servers::url::ServerUrl,
@@ -429,7 +428,6 @@ mod tests {
             name: format!("Server {server_id}"),
             url: ServerUrl::parse("http://example:8096").unwrap(),
             priority,
-            media_streaming_mode: MediaStreamingMode::Redirect,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         }

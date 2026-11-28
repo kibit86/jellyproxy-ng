@@ -583,7 +583,7 @@ mod tests {
     use crate::{
         application::request::context::RequestContext,
         auth::service::{AuthorizationSession, LocalCredential, LocalUser},
-        config::{AppConfig, MediaStreamingMode},
+        config::AppConfig,
         libraries::service::VirtualLibraryAccessScope,
         media::storage::MediaStorageService,
         persistence::MIGRATOR,
@@ -600,12 +600,7 @@ mod tests {
         let upstream = wiremock::MockServer::start().await;
         let servers = ServerStorageService::new(pool.clone());
         let id = servers
-            .add_server(
-                "Report owner",
-                &upstream.uri(),
-                100,
-                MediaStreamingMode::Proxy,
-            )
+            .add_server("Report owner", &upstream.uri(), 100)
             .await
             .unwrap();
         let server = servers.get_server_by_id(id).await.unwrap().unwrap();

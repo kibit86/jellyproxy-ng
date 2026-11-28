@@ -1,6 +1,5 @@
 //! HTTP coverage through the real proxy handler, preprocessing, SQLite mappings,
 //! request/response translation and the production item-detail method router.
-use crate::config::MediaStreamingMode;
 use crate::translation::response_processor::ResponseProcessingProfile;
 use crate::{
     auth::service::LocalUser,
@@ -75,12 +74,7 @@ impl Fixture {
                 .await;
             let id = state
                 .server_storage
-                .add_server(
-                    &format!("Server {index}"),
-                    &upstream.uri(),
-                    100 - index,
-                    MediaStreamingMode::Proxy,
-                )
+                .add_server(&format!("Server {index}"), &upstream.uri(), 100 - index)
                 .await
                 .unwrap();
             let server = state

@@ -879,23 +879,15 @@ mod tests {
         wiremock::MockServer,
     ) {
         use crate::{
-            config::{AppConfig, MediaStreamingMode},
-            media::storage::MediaStorageService,
-            persistence::MIGRATOR,
-            protocol::device::Device,
-            servers::storage::ServerStorageService,
+            config::AppConfig, media::storage::MediaStorageService, persistence::MIGRATOR,
+            protocol::device::Device, servers::storage::ServerStorageService,
         };
         let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
         MIGRATOR.run(&pool).await.unwrap();
         let upstream = wiremock::MockServer::start().await;
         let servers = ServerStorageService::new(pool.clone());
         let id = servers
-            .add_server(
-                "Catalog owner",
-                &upstream.uri(),
-                100,
-                MediaStreamingMode::Proxy,
-            )
+            .add_server("Catalog owner", &upstream.uri(), 100)
             .await
             .unwrap();
         let server = servers.get_server_by_id(id).await.unwrap().unwrap();

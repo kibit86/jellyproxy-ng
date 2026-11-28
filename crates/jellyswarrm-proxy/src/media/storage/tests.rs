@@ -6,7 +6,6 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use crate::persistence::MIGRATOR;
 
 use super::*;
-use crate::config::MediaStreamingMode;
 use crate::servers::url::ServerUrl;
 
 async fn foreign_key_pool() -> SqlitePool {
@@ -537,7 +536,6 @@ async fn create_test_server_with_url(pool: &SqlitePool, url: &str) -> Server {
         name: "Test Server".to_string(),
         url: ServerUrl::parse(url).unwrap(),
         priority: 100,
-        media_streaming_mode: MediaStreamingMode::Redirect,
         created_at: now,
         updated_at: now,
     }

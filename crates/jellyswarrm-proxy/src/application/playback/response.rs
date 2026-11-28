@@ -243,10 +243,7 @@ mod tests {
     use super::*;
     use crate::test_support::MediaFixture;
     use crate::{
-        config::{AppConfig, MediaStreamingMode},
-        domain::ids::ServerId,
-        persistence::MIGRATOR,
-        servers::url::ServerUrl,
+        config::AppConfig, domain::ids::ServerId, persistence::MIGRATOR, servers::url::ServerUrl,
     };
 
     async fn create_test_state() -> (MediaFixture, Server) {
@@ -274,7 +271,6 @@ mod tests {
             name: "People Server".to_string(),
             url: ServerUrl::parse("http://people.example:8096").unwrap(),
             priority: 100,
-            media_streaming_mode: MediaStreamingMode::Redirect,
             created_at: now,
             updated_at: now,
         };

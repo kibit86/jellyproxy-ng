@@ -53,10 +53,9 @@ and `RUST_LOG` (log level, for example `jellyswarrm_proxy=debug`).
 | `password` | `jellyswarrm` | `JELLYSWARRM_PASSWORD` | Password of that administrator at creation (⚠️ change it). Afterwards the database owns the password: change it from **Profile**. |
 | `session_key` | *Generated 64-byte key* | – | Base64-encoded key from which mapping credentials and sessions are encrypted. Losing or changing it makes them unreadable. |
 | `timeout` | `20` | `JELLYSWARRM_TIMEOUT` | Request timeout in seconds. |
-| `preconfigured_servers` | `[]` | – | Optional list of Jellyfin servers (`url`, `name`, `priority`, `media_streaming_mode`) added at start. They are matched **by URL** on every start. |
+| `preconfigured_servers` | `[]` | – | Optional list of Jellyfin servers (`url`, `name`, `priority`) added at start. They are matched **by URL** on every start. |
 | `ui_route` | `ui` | – | URL path segment of the web UI (for example `/ui`). |
 | `url_prefix` | *(none)* | – | Optional URL prefix for all routes (reverse proxy setups). |
-| `media_streaming_mode` | `Proxy` | – | Legacy global value, kept so that old configuration files still load. It does **not** choose a server's mode: that is set per server (see the notes). |
 | `server_background_check_interval_secs` | `30` | – | Interval in seconds of the background server health checks. |
 | `auto_create_users_on_login` | `false` | – | When `true`, a login with an account that exists on a connected server creates a proxy user and its mappings. **Off by default in this fork** (accounts are mapped explicitly). |
 | `merge_libraries` | `true` | – | Merge libraries with matching names across servers into virtual libraries. |
@@ -68,8 +67,7 @@ and `RUST_LOG` (log level, for example `jellyswarrm_proxy=debug`).
 
 ### Notes
 - The `session_key` is generated as a secure 64-byte key if not specified, and is stored in the config file for reuse.
-- Each server has its own streaming mode (`Redirect` or `Proxy`). For preconfigured servers, omit `media_streaming_mode`
-  to use the default, **`Proxy`**.
+- Media always goes through the proxy. The old `media_streaming_mode` key (global or per preconfigured server) is no longer used: if an old file still contains it, it is ignored.
 - Configuration files are resolved from the data directory (`./data` by default), which can be overridden with `JELLYSWARRM_DATA_DIR`.
 - The file is written with owner-only permissions and also contains the administrator password given at first start:
   protect it.

@@ -75,4 +75,25 @@ mod tests {
         drop(first);
         assert!(clone.config.exists());
     }
+
+    #[test]
+    fn old_config_with_the_removed_streaming_mode_key_still_loads() {
+        let paths = Paths::temporary();
+        std::fs::write(
+            &paths.config,
+            r#"
+media_streaming_mode = "Redirect"
+
+[[preconfigured_servers]]
+url = "http://localhost:8096"
+name = "Movies"
+priority = 100
+media_streaming_mode = "Redirect"
+"#,
+        )
+        .unwrap();
+        let config = super::super::load_config(&paths).unwrap();
+        assert_eq!(config.preconfigured_servers.len(), 1);
+        assert_eq!(config.preconfigured_servers[0].name, "Movies");
+    }
 }

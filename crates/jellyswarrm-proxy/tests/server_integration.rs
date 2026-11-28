@@ -750,7 +750,7 @@ fn write_proxy_config(
     );
     for (name, url, priority) in upstreams {
         config.push_str(&format!(
-            "\n[[preconfigured_servers]]\nurl = \"{url}\"\nname = \"{name}\"\npriority = {priority}\nmedia_streaming_mode = \"Proxy\"\n"
+            "\n[[preconfigured_servers]]\nurl = \"{url}\"\nname = \"{name}\"\npriority = {priority}\n"
         ));
     }
     std::fs::write(data_dir.join("jellyswarrm.toml"), config)

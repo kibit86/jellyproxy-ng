@@ -10,8 +10,8 @@ use serde::Deserialize;
 use tracing::{error, info};
 
 use crate::{
-    config::MediaStreamingMode, domain::ids::ServerId, domain::security::Password,
-    http::state::ManagementState, servers::storage::Server,
+    domain::ids::ServerId, domain::security::Password, http::state::ManagementState,
+    servers::storage::Server,
 };
 
 #[derive(Template)]
@@ -24,8 +24,6 @@ pub(crate) struct ServerWithAdmin {
     pub(crate) server: Server,
     #[allow(dead_code)] // federation is off in this fork
     pub(crate) has_admin: bool,
-    pub(crate) is_redirect: bool,
-    pub(crate) is_proxy: bool,
 }
 
 #[derive(Template)]
@@ -40,17 +38,11 @@ pub(crate) struct AddServerForm {
     pub(crate) name: String,
     pub(crate) url: String,
     pub(crate) priority: i32,
-    pub(crate) media_streaming_mode: String,
 }
 
 #[derive(Deserialize)]
 pub(crate) struct UpdatePriorityForm {
     pub(crate) priority: i32,
-}
-
-#[derive(Deserialize)]
-pub(crate) struct UpdateMediaStreamingModeForm {
-    pub(crate) media_streaming_mode: String,
 }
 
 #[derive(Deserialize)]
@@ -70,13 +62,7 @@ async fn render_server_list(state: &ManagementState) -> Result<String, String> {
                     .await
                     .unwrap_or(None)
                     .is_some();
-                let is_redirect = server.media_streaming_mode == MediaStreamingMode::Redirect;
-                servers_with_admin.push(ServerWithAdmin {
-                    server,
-                    has_admin,
-                    is_redirect,
-                    is_proxy: !is_redirect,
-                });
+                servers_with_admin.push(ServerWithAdmin { server, has_admin });
             }
 
             let template = ServerListTemplate {
@@ -146,26 +132,10 @@ pub(crate) async fn add_server(
             .into_response();
     }
 
-    let media_streaming_mode = match form.media_streaming_mode.parse::<MediaStreamingMode>() {
-        Ok(mode) => mode,
-        Err(_) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Html("<div class=\"alert alert-error\">Invalid streaming mode</div>"),
-            )
-                .into_response()
-        }
-    };
-
     // Try to add the server
     match state
         .server_administration
-        .add(
-            form.name.trim(),
-            form.url.trim(),
-            form.priority,
-            media_streaming_mode,
-        )
+        .add(form.name.trim(), form.url.trim(), form.priority)
         .await
     {
         Ok(server_id) => {
@@ -206,51 +176,6 @@ pub(crate) async fn add_server(
                 Html(format!(
                     "<div class=\"alert alert-error\">{error_message}</div>"
                 )),
-            )
-                .into_response()
-        }
-    }
-}
-
-/// Update server media streaming mode
-pub(crate) async fn update_server_media_streaming_mode(
-    State(state): State<ManagementState>,
-    Path(server_id): Path<ServerId>,
-    Form(form): Form<UpdateMediaStreamingModeForm>,
-) -> Response {
-    let media_streaming_mode = match form.media_streaming_mode.parse::<MediaStreamingMode>() {
-        Ok(mode) => mode,
-        Err(_) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Html("<div class=\"alert alert-error\">Invalid streaming mode</div>"),
-            )
-                .into_response()
-        }
-    };
-
-    match state
-        .server_administration
-        .set_streaming_mode(server_id, media_streaming_mode)
-        .await
-    {
-        Ok(true) => {
-            info!(
-                "Updated server {} media streaming mode to {}",
-                server_id, media_streaming_mode
-            );
-            get_server_list(State(state)).await.into_response()
-        }
-        Ok(false) => (
-            StatusCode::NOT_FOUND,
-            Html("<div class=\"alert alert-error\">Server not found</div>"),
-        )
-            .into_response(),
-        Err(e) => {
-            error!("Failed to update server media streaming mode: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Html("<div class=\"alert alert-error\">Failed to update streaming mode</div>"),
             )
                 .into_response()
         }

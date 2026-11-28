@@ -204,14 +204,13 @@ impl SnapshotRequest {
         hash_request_identity(&mut hash, request, scope, token.as_deref());
         let config = state.config.read().await;
         hash.update(format!(
-            "{}|{}|{:?}|{:?}|{:?}|{:?}|{:?}",
+            "{}|{}|{:?}|{:?}|{:?}|{:?}",
             config.deduplicate_media,
             config.include_server_name_in_media,
             config.server_id,
             config.url_prefix,
             config.public_address,
             config.server_name,
-            config.media_streaming_mode
         ));
         drop(config);
         for target in targets {

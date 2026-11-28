@@ -1,6 +1,6 @@
 //! Startup resource inputs versus the explicit set of dynamically publishable
 //! values. AppConfig remains the persisted/backwards-compatible file envelope.
-use super::{AppConfig, DebugUser, MediaStreamingMode, PreconfiguredServer, UrlSegment};
+use super::{AppConfig, DebugUser, PreconfiguredServer, UrlSegment};
 use crate::domain::security::Password;
 
 /// Immutable, scoped administrator credential (the configured password: the key
@@ -38,7 +38,6 @@ pub(crate) struct RuntimeSettings {
     pub(crate) public_address: String,
     pub(crate) server_name: String,
     pub(crate) include_server_name_in_media: bool,
-    pub(crate) media_streaming_mode: MediaStreamingMode,
     pub(crate) auto_create_users_on_login: bool,
     pub(crate) merge_libraries: bool,
     pub(crate) deduplicate_media: bool,
@@ -105,7 +104,6 @@ impl AppConfig {
             public_address: self.public_address.clone(),
             server_name: self.server_name.clone(),
             include_server_name_in_media: self.include_server_name_in_media,
-            media_streaming_mode: self.media_streaming_mode,
             auto_create_users_on_login: self.auto_create_users_on_login,
             merge_libraries: self.merge_libraries,
             deduplicate_media: self.deduplicate_media,
@@ -118,7 +116,6 @@ impl AppConfig {
         self.public_address = settings.public_address;
         self.server_name = settings.server_name;
         self.include_server_name_in_media = settings.include_server_name_in_media;
-        self.media_streaming_mode = settings.media_streaming_mode;
         self.auto_create_users_on_login = settings.auto_create_users_on_login;
         self.merge_libraries = settings.merge_libraries;
         self.deduplicate_media = settings.deduplicate_media;

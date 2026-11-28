@@ -12,7 +12,6 @@ use jellyfin_api::{
     models::PublicSystemInfo,
 };
 
-use crate::config::MediaStreamingMode;
 use crate::domain::ids::ServerId;
 use crate::domain::security::EncryptedPassword;
 use crate::servers::url::ServerUrl;
@@ -23,7 +22,6 @@ pub(crate) struct Server {
     pub(crate) name: String,
     pub(crate) url: ServerUrl,
     pub(crate) priority: i32,
-    pub(crate) media_streaming_mode: MediaStreamingMode,
     pub(crate) created_at: chrono::DateTime<chrono::Utc>,
     pub(crate) updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -39,10 +37,6 @@ impl Server {
             name: row.try_get("name")?,
             url: parse_server_url_column("url", row.try_get("url")?)?,
             priority: row.try_get("priority")?,
-            media_streaming_mode: row
-                .try_get::<String, _>("media_streaming_mode")?
-                .parse()
-                .unwrap_or(MediaStreamingMode::Redirect),
             created_at: row.try_get("created_at")?,
             updated_at: row.try_get("updated_at")?,
         })
@@ -54,10 +48,6 @@ impl Server {
             name: row.try_get("server_name")?,
             url: parse_server_url_column("server_url_full", row.try_get("server_url_full")?)?,
             priority: row.try_get("priority")?,
-            media_streaming_mode: row
-                .try_get::<String, _>("media_streaming_mode")?
-                .parse()
-                .unwrap_or(MediaStreamingMode::Redirect),
             created_at: row.try_get("server_created_at")?,
             updated_at: row.try_get("server_updated_at")?,
         })
@@ -145,7 +135,6 @@ impl ServerStorageService {
         name: &str,
         url: &str,
         priority: i32,
-        media_streaming_mode: MediaStreamingMode,
     ) -> Result<ServerId, sqlx::Error> {
         let url = match ServerUrl::parse(url) {
             Ok(url) => url,
@@ -162,13 +151,12 @@ impl ServerStorageService {
         let result = sqlx::query(
             r#"
             INSERT INTO servers (name, url, priority, media_streaming_mode, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, 'Proxy', ?, ?)
             "#,
         )
         .bind(name)
         .bind(url.as_str())
         .bind(priority)
-        .bind(media_streaming_mode.to_string())
         .bind(now)
         .bind(now)
         .execute(&self.pool)
@@ -187,7 +175,6 @@ impl ServerStorageService {
         name: &str,
         url: &str,
         priority: i32,
-        media_streaming_mode: MediaStreamingMode,
     ) -> Result<ServerId, sqlx::Error> {
         let url = ServerUrl::parse(url).map_err(|_| {
             sqlx::Error::Io(std::io::Error::new(
@@ -203,22 +190,19 @@ impl ServerStorageService {
                 .await?;
 
         let Some(existing_id) = existing_id else {
-            return self
-                .add_server(name, url.as_str(), priority, media_streaming_mode)
-                .await;
+            return self.add_server(name, url.as_str(), priority).await;
         };
 
         sqlx::query(
             r#"
             UPDATE servers
-            SET name = ?, url = ?, priority = ?, media_streaming_mode = ?, updated_at = ?
+            SET name = ?, url = ?, priority = ?, updated_at = ?
             WHERE id = ?
             "#,
         )
         .bind(name)
         .bind(url.as_str())
         .bind(priority)
-        .bind(media_streaming_mode.to_string())
         .bind(chrono::Utc::now())
         .bind(existing_id)
         .execute(&self.pool)
@@ -234,7 +218,7 @@ impl ServerStorageService {
     ) -> Result<Option<Server>, sqlx::Error> {
         let row = sqlx::query(
             r#"
-            SELECT id, name, url, priority, media_streaming_mode, created_at, updated_at
+            SELECT id, name, url, priority, created_at, updated_at
             FROM servers 
             WHERE id = ?
             "#,
@@ -249,7 +233,7 @@ impl ServerStorageService {
     pub(crate) async fn list_servers(&self) -> Result<Vec<Server>, sqlx::Error> {
         let rows = sqlx::query(
             r#"
-            SELECT id, name, url, priority, media_streaming_mode, created_at, updated_at
+            SELECT id, name, url, priority, created_at, updated_at
             FROM servers 
             ORDER BY priority DESC, name ASC
             "#,
@@ -275,29 +259,6 @@ impl ServerStorageService {
             "#,
         )
         .bind(new_priority)
-        .bind(now)
-        .bind(server_id.as_i64())
-        .execute(&self.pool)
-        .await?;
-
-        Ok(result.rows_affected() > 0)
-    }
-
-    pub(crate) async fn update_server_media_streaming_mode(
-        &self,
-        server_id: ServerId,
-        media_streaming_mode: MediaStreamingMode,
-    ) -> Result<bool, sqlx::Error> {
-        let now = chrono::Utc::now();
-
-        let result = sqlx::query(
-            r#"
-            UPDATE servers
-            SET media_streaming_mode = ?, updated_at = ?
-            WHERE id = ?
-            "#,
-        )
-        .bind(media_streaming_mode.to_string())
         .bind(now)
         .bind(server_id.as_i64())
         .execute(&self.pool)
@@ -513,12 +474,7 @@ mod tests {
 
         // Test adding a server
         let server_id = service
-            .add_server(
-                "test-server",
-                "http://localhost:8096",
-                100,
-                MediaStreamingMode::Redirect,
-            )
+            .add_server("test-server", "http://localhost:8096", 100)
             .await
             .unwrap();
 
@@ -530,15 +486,17 @@ mod tests {
         assert_eq!(server.name, "test-server");
         assert_eq!(server.url.as_str(), "http://localhost:8096");
         assert_eq!(server.priority, 100);
-        assert_eq!(server.media_streaming_mode, MediaStreamingMode::Redirect);
+        // Every server is reached through the proxy; the column is kept for old databases only.
+        let column: String =
+            sqlx::query_scalar("SELECT media_streaming_mode FROM servers WHERE id = ?")
+                .bind(server_id.as_i64())
+                .fetch_one(&service.pool)
+                .await
+                .unwrap();
+        assert_eq!(column, "Proxy");
 
         let duplicate_url = service
-            .add_server(
-                "duplicate-url-server",
-                "http://localhost:8096/",
-                100,
-                MediaStreamingMode::Redirect,
-            )
+            .add_server("duplicate-url-server", "http://localhost:8096/", 100)
             .await;
         assert!(duplicate_url.is_err());
 
@@ -552,15 +510,27 @@ mod tests {
             .await
             .unwrap();
         assert!(updated);
+    }
 
-        let updated = service
-            .update_server_media_streaming_mode(server_id, MediaStreamingMode::Proxy)
+    #[tokio::test]
+    async fn a_server_saved_with_the_removed_redirect_mode_still_loads() {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        MIGRATOR.run(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO servers (id, name, url, priority, media_streaming_mode, created_at, updated_at) \
+             VALUES (7, 'Old', 'http://old:8096', 50, 'Redirect', datetime('now'), datetime('now'))",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let service = ServerStorageService::new(pool);
+        let server = service
+            .get_server_by_id(ServerId::new(7))
             .await
+            .unwrap()
             .unwrap();
-        assert!(updated);
-
-        let server = service.get_server_by_id(server_id).await.unwrap().unwrap();
-        assert_eq!(server.media_streaming_mode, MediaStreamingMode::Proxy);
+        assert_eq!((server.name.as_str(), server.priority), ("Old", 50));
+        assert_eq!(service.list_servers().await.unwrap().len(), 1);
     }
 
     #[tokio::test]
@@ -569,39 +539,19 @@ mod tests {
         MIGRATOR.run(&pool).await.unwrap();
         let service = ServerStorageService::new(pool);
         let original_id = service
-            .add_server(
-                "Movies",
-                "http://localhost:8096",
-                100,
-                MediaStreamingMode::Redirect,
-            )
+            .add_server("Movies", "http://localhost:8096", 100)
             .await
             .unwrap();
 
         let updated_id = service
-            .upsert_preconfigured_server(
-                "Movies 1",
-                "http://localhost:8096/",
-                101,
-                MediaStreamingMode::Proxy,
-            )
+            .upsert_preconfigured_server("Movies 1", "http://localhost:8096/", 101)
             .await
             .unwrap();
 
         let updated = service.get_server_by_id(updated_id).await.unwrap().unwrap();
         assert_eq!(
-            (
-                updated_id,
-                updated.name,
-                updated.priority,
-                updated.media_streaming_mode
-            ),
-            (
-                original_id,
-                "Movies 1".to_string(),
-                101,
-                MediaStreamingMode::Proxy
-            )
+            (updated_id, updated.name, updated.priority),
+            (original_id, "Movies 1".to_string(), 101)
         );
     }
 }

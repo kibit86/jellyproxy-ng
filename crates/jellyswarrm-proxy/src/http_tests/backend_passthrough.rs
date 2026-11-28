@@ -309,12 +309,7 @@ async fn websocket_is_relayed_both_ways() {
         let id = f
             .state
             .server_storage
-            .add_server(
-                "WebSocket backend",
-                &format!("http://{backend_addr}"),
-                100,
-                MediaStreamingMode::Proxy,
-            )
+            .add_server("WebSocket backend", &format!("http://{backend_addr}"), 100)
             .await
             .unwrap();
         f.state

@@ -210,14 +210,9 @@ mod tests {
     use std::sync::Arc;
 
     use crate::{
-        auth::service::UserAuthorizationService,
-        config::{AppConfig, MediaStreamingMode},
-        domain::ids::ServerId,
-        libraries::service::VirtualLibraryService,
-        media::storage::MediaStorageService,
-        persistence::MIGRATOR,
-        playback::PlaybackRegistry,
-        servers::storage::ServerStorageService,
+        auth::service::UserAuthorizationService, config::AppConfig, domain::ids::ServerId,
+        libraries::service::VirtualLibraryService, media::storage::MediaStorageService,
+        persistence::MIGRATOR, playback::PlaybackRegistry, servers::storage::ServerStorageService,
         servers::Server,
     };
 
@@ -241,7 +236,6 @@ mod tests {
             name: "Backend".into(),
             url: crate::servers::url::ServerUrl::parse("http://backend.example/base").unwrap(),
             priority: 1,
-            media_streaming_mode: MediaStreamingMode::Proxy,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         };

@@ -6,7 +6,7 @@ use super::*;
 use crate::{
     application::request::{context::RequestContext, input::OperationRequest},
     auth::service::AuthorizationSession,
-    config::{AppConfig, MediaStreamingMode},
+    config::AppConfig,
     libraries::service::VirtualLibraryAccessScope,
     media::identity::{MediaAlias, MediaKind, MediaObservation, MediaProvider},
     media::storage::MediaCatalogSnapshot,
@@ -75,12 +75,7 @@ async fn check_selected_source_detail(catalog_scopes: &[&str]) {
             .await;
         let server_id = state
             .server_storage
-            .add_server(
-                &format!("Server {index}"),
-                &upstream.uri(),
-                100,
-                MediaStreamingMode::Redirect,
-            )
+            .add_server(&format!("Server {index}"), &upstream.uri(), 100)
             .await
             .unwrap();
         let server = state

@@ -269,7 +269,7 @@ impl AuthorizedTarget {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{auth::service::LocalCredential, config::MediaStreamingMode};
+    use crate::auth::service::LocalCredential;
 
     fn user() -> LocalUser {
         LocalUser {
@@ -289,7 +289,6 @@ mod tests {
             url: crate::servers::url::ServerUrl::parse(&format!("http://backend-{id}.example"))
                 .unwrap(),
             priority: 100,
-            media_streaming_mode: MediaStreamingMode::Redirect,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         };

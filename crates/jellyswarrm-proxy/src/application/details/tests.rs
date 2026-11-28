@@ -3,14 +3,9 @@
 use super::*;
 use crate::test_support::MediaFixture;
 use crate::{
-    application::request::context::RequestContext,
-    auth::service::AuthorizationSession,
-    config::{AppConfig, MediaStreamingMode},
-    libraries::service::VirtualLibraryAccessScope,
-    persistence::MIGRATOR,
-    protocol::caller::JellyfinAuthorization,
-    protocol::device::Device,
-    servers::storage::Server,
+    application::request::context::RequestContext, auth::service::AuthorizationSession,
+    config::AppConfig, libraries::service::VirtualLibraryAccessScope, persistence::MIGRATOR,
+    protocol::caller::JellyfinAuthorization, protocol::device::Device, servers::storage::Server,
 };
 use hyper::StatusCode;
 use serde_json::json;
@@ -69,7 +64,6 @@ impl Fixture {
                     &format!("Backend {index}"),
                     &upstream.uri(),
                     300 - index as i32 * 100,
-                    MediaStreamingMode::Redirect,
                 )
                 .await
                 .unwrap();

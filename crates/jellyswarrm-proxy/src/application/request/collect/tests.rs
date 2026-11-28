@@ -100,12 +100,7 @@ async fn preprocessed_image_request(
 ) -> reqwest::Request {
     let server_id = state
         .server_storage
-        .add_server(
-            "Images",
-            &format!("{}/jellyfin", upstream.uri()),
-            100,
-            crate::config::MediaStreamingMode::Redirect,
-        )
+        .add_server("Images", &format!("{}/jellyfin", upstream.uri()), 100)
         .await
         .unwrap();
     let server = state
@@ -390,12 +385,7 @@ async fn invalid_token_cannot_adopt_user_from_request_body() {
 async fn playback_server(state: &MediaServices) -> Server {
     let server_id = state
         .server_storage
-        .add_server(
-            "Playback",
-            "http://playback.example",
-            100,
-            crate::config::MediaStreamingMode::Redirect,
-        )
+        .add_server("Playback", "http://playback.example", 100)
         .await
         .unwrap();
     state
@@ -616,12 +606,7 @@ async fn playback_report_rejects_ambiguous_aggregate_without_session_or_source()
     for name in ["first", "second"] {
         let id = state
             .server_storage
-            .add_server(
-                name,
-                &format!("http://{name}.example"),
-                100,
-                crate::config::MediaStreamingMode::Redirect,
-            )
+            .add_server(name, &format!("http://{name}.example"), 100)
             .await
             .unwrap();
         let server = state

@@ -4,7 +4,6 @@ use std::sync::Arc;
 
 use crate::{
     application::catalog::snapshots::CatalogSnapshots,
-    config::MediaStreamingMode,
     domain::ids::ServerId,
     domain::security::{encrypt_password, EncryptionError, HashedPassword, Password},
     playback::PlaybackRegistry,
@@ -118,9 +117,8 @@ impl ServerAdministration {
         name: &str,
         url: &str,
         priority: i32,
-        mode: MediaStreamingMode,
     ) -> Result<ServerId, sqlx::Error> {
-        let id = self.registry.add_server(name, url, priority, mode).await?;
+        let id = self.registry.add_server(name, url, priority).await?;
         self.catalogs.invalidate_all();
         self.registry.check_servers_health().await;
         Ok(id)
@@ -132,21 +130,6 @@ impl ServerAdministration {
         priority: i32,
     ) -> Result<bool, sqlx::Error> {
         let changed = self.registry.update_server_priority(id, priority).await?;
-        if changed {
-            self.catalogs.invalidate_all();
-        }
-        Ok(changed)
-    }
-
-    pub(crate) async fn set_streaming_mode(
-        &self,
-        id: ServerId,
-        mode: MediaStreamingMode,
-    ) -> Result<bool, sqlx::Error> {
-        let changed = self
-            .registry
-            .update_server_media_streaming_mode(id, mode)
-            .await?;
         if changed {
             self.catalogs.invalidate_all();
         }
@@ -180,7 +163,7 @@ mod tests {
         MIGRATOR.run(&pool).await.unwrap();
         let registry = Arc::new(ServerStorageService::new(pool));
         let id = registry
-            .add_server("Backend", &upstream.uri(), 100, MediaStreamingMode::Proxy)
+            .add_server("Backend", &upstream.uri(), 100)
             .await
             .unwrap();
         let key: HashedPassword = (&Password::from("master-password")).into();
@@ -288,12 +271,7 @@ mod tests {
         let playback = Arc::new(PlaybackRegistry::new());
         let catalogs = Arc::new(CatalogSnapshots::default());
         let id = registry
-            .add_server(
-                "Backend",
-                "http://backend.example",
-                100,
-                MediaStreamingMode::Proxy,
-            )
+            .add_server("Backend", "http://backend.example", 100)
             .await
             .unwrap();
         let server = registry.get_server_by_id(id).await.unwrap().unwrap();
@@ -322,10 +300,6 @@ mod tests {
             .await;
         let admin = ServerAdministration::new(registry.clone(), playback.clone(), catalogs.clone());
         assert!(admin.set_priority(id, 999).await.unwrap());
-        assert!(admin
-            .set_streaming_mode(id, MediaStreamingMode::Redirect)
-            .await
-            .unwrap());
         let resolved = media
             .get_media_mapping_with_server(&mapping.virtual_media_id)
             .await
@@ -333,7 +307,6 @@ mod tests {
             .unwrap()
             .1;
         assert_eq!(resolved.priority, 999);
-        assert_eq!(resolved.media_streaming_mode, MediaStreamingMode::Redirect);
         assert!(admin.delete(id).await.unwrap());
         assert!(media
             .get_media_mapping_with_server(&mapping.virtual_media_id)

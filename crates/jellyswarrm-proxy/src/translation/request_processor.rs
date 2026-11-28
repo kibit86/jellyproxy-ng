@@ -174,7 +174,7 @@ mod tests {
     use crate::{application::media_services::MediaServices, test_support::MediaFixture};
     use crate::{
         auth::service::UserAuthorizationService,
-        config::{AppConfig, MediaStreamingMode},
+        config::AppConfig,
         domain::ids::ServerId,
         media::identity::{MediaAlias, MediaKind, MediaObservation, MediaProvider},
         media::storage::{MediaCatalogSnapshot, MediaStorageService},
@@ -224,7 +224,6 @@ mod tests {
             name: "Test Server".to_string(),
             url: ServerUrl::parse("http://server.example:8096").unwrap(),
             priority: 0,
-            media_streaming_mode: MediaStreamingMode::Redirect,
             created_at: now,
             updated_at: now,
         }
@@ -301,12 +300,7 @@ mod tests {
         let (data, _) = processor_fixture().await;
         let id = data
             .server_storage
-            .add_server(
-                "first",
-                "http://first.example",
-                100,
-                MediaStreamingMode::Redirect,
-            )
+            .add_server("first", "http://first.example", 100)
             .await
             .unwrap();
         let server = data
@@ -367,12 +361,7 @@ mod tests {
         );
         let foreign_server_id = data
             .server_storage
-            .add_server(
-                "second",
-                "http://second.example",
-                100,
-                MediaStreamingMode::Redirect,
-            )
+            .add_server("second", "http://second.example", 100)
             .await
             .unwrap();
         let foreign_server = data
@@ -410,12 +399,7 @@ mod tests {
         let (data, _) = processor_fixture().await;
         let server_id = data
             .server_storage
-            .add_server(
-                "first",
-                "http://server.example:8096",
-                100,
-                MediaStreamingMode::Redirect,
-            )
+            .add_server("first", "http://server.example:8096", 100)
             .await
             .unwrap();
         let server = data
@@ -563,12 +547,7 @@ mod tests {
         MIGRATOR.run(&pool).await.unwrap();
         let server_storage = ServerStorageService::new(pool.clone());
         let server_id = server_storage
-            .add_server(
-                "Server",
-                "http://server.example:8096",
-                100,
-                MediaStreamingMode::Redirect,
-            )
+            .add_server("Server", "http://server.example:8096", 100)
             .await
             .unwrap();
         let server = server_storage

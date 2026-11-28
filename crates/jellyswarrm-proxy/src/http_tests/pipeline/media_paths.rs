@@ -52,56 +52,16 @@ impl Media {
     }
 }
 
-scenario_test!(
-    movie_proxy,
-    media_path_contract,
-    Media::Movie,
-    MediaStreamingMode::Proxy
-);
-scenario_test!(
-    movie_redirect,
-    media_path_contract,
-    Media::Movie,
-    MediaStreamingMode::Redirect
-);
-scenario_test!(
-    episode_proxy,
-    media_path_contract,
-    Media::Episode,
-    MediaStreamingMode::Proxy
-);
-scenario_test!(
-    episode_redirect,
-    media_path_contract,
-    Media::Episode,
-    MediaStreamingMode::Redirect
-);
-scenario_test!(
-    audio_proxy,
-    media_path_contract,
-    Media::Audio,
-    MediaStreamingMode::Proxy
-);
-scenario_test!(
-    audio_redirect,
-    media_path_contract,
-    Media::Audio,
-    MediaStreamingMode::Redirect
-);
+scenario_test!(movie_proxy, media_path_contract, Media::Movie);
+scenario_test!(episode_proxy, media_path_contract, Media::Episode);
+scenario_test!(audio_proxy, media_path_contract, Media::Audio);
 
 fn list(items: Vec<Value>) -> ResponseTemplate {
     ResponseTemplate::new(200)
         .set_body_json(json!({"TotalRecordCount":items.len(),"StartIndex":0,"Items":items}))
 }
 
-async fn mount_media(f: &Fixture, media: Media, mode: MediaStreamingMode) {
-    for server in f.state.server_storage.list_servers().await.unwrap() {
-        f.state
-            .server_storage
-            .update_server_media_streaming_mode(server.id, mode)
-            .await
-            .unwrap();
-    }
+async fn mount_media(f: &Fixture, media: Media) {
     for (owner, upstream) in f.upstreams.iter().enumerate() {
         // Deliberately reuse item/source IDs across servers: only proxy IDs and
         // the selected source/session can distinguish the two copies.
@@ -233,13 +193,7 @@ async fn request_counts(f: &Fixture) -> Vec<usize> {
     counts
 }
 
-async fn delivery(
-    f: &Fixture,
-    url: &str,
-    range: Option<&str>,
-    owner: usize,
-    mode: MediaStreamingMode,
-) -> reqwest::Response {
+async fn delivery(f: &Fixture, url: &str, range: Option<&str>) -> reqwest::Response {
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .build()
@@ -249,27 +203,14 @@ async fn delivery(
         request = request.header("Range", range);
     }
     let response = request.send().await.unwrap();
-    if mode == MediaStreamingMode::Redirect {
-        assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
-        let location = response.headers()["Location"].to_str().unwrap();
-        assert!(location.starts_with(&format!("{}/", f.upstreams[owner].uri())));
-        assert!(!location.contains(&f.token()));
-        // Follow Location alone: browsers cannot attach rewritten backend auth.
-        let mut request = client.get(location);
-        if let Some(range) = range {
-            request = request.header("Range", range);
-        }
-        request.send().await.unwrap()
-    } else {
-        assert!(!response.status().is_redirection());
-        response
-    }
+    assert!(!response.status().is_redirection());
+    response
 }
 
-async fn media_path_contract(scenario: Scenario, media: Media, mode: MediaStreamingMode) {
+async fn media_path_contract(scenario: Scenario, media: Media) {
     let f = Fixture::for_scenario(scenario).await;
     f.healthy().await;
-    mount_media(&f, media, mode).await;
+    mount_media(&f, media).await;
     let roots = catalog(&f, &format!("/UserViews?UserId={}", f.user.id)).await;
     assert_eq!(
         roots["TotalRecordCount"],
@@ -352,8 +293,6 @@ async fn media_path_contract(scenario: Scenario, media: Media, mode: MediaStream
                     media.route()
                 ),
                 Some("bytes=2-5"),
-                owner,
-                mode,
             )
             .await;
             assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
@@ -382,26 +321,19 @@ async fn media_path_contract(scenario: Scenario, media: Media, mode: MediaStream
                 assert_eq!(response.status(), StatusCode::OK, "{url}");
                 assert_eq!(response.headers()["Content-Type"], expected_type);
                 let base = response.url().clone();
-                let expected_origin = if mode == MediaStreamingMode::Proxy {
-                    &f.url
-                } else {
-                    &f.upstreams[owner].uri()
-                };
-                assert!(base.as_str().starts_with(expected_origin));
+                assert!(base.as_str().starts_with(&f.url));
                 let bytes = response.bytes().await.unwrap();
                 if let Some(next) = next {
                     let manifest = std::str::from_utf8(&bytes).unwrap();
                     assert!(manifest.starts_with("#EXTM3U\n"));
-                    if mode == MediaStreamingMode::Proxy {
-                        assert!(
-                            !manifest.contains("backend-token-"),
-                            "backend credentials leaked: {manifest}"
-                        );
-                        assert!(
-                            !manifest.contains(SOURCE),
-                            "backend source ID leaked: {manifest}"
-                        );
-                    }
+                    assert!(
+                        !manifest.contains("backend-token-"),
+                        "backend credentials leaked: {manifest}"
+                    );
+                    assert!(
+                        !manifest.contains(SOURCE),
+                        "backend source ID leaked: {manifest}"
+                    );
                     let reference = manifest
                         .lines()
                         .find(|line| !line.starts_with('#'))

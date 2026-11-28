@@ -23,17 +23,17 @@ const WORKFLOWS: &[(&str, &str, &str)] = &[
     (
         "POST",
         "/QuickConnect/Initiate",
-        "kodi_quick_connect_synced_item_plays_in_redirect_mode",
+        "kodi_quick_connect_synced_item_plays_through_the_proxy",
     ),
     (
         "POST",
         "/QuickConnect/Authorize",
-        "kodi_quick_connect_synced_item_plays_in_redirect_mode",
+        "kodi_quick_connect_synced_item_plays_through_the_proxy",
     ),
     (
         "POST",
         "/Users/AuthenticateWithQuickConnect",
-        "kodi_quick_connect_synced_item_plays_in_redirect_mode",
+        "kodi_quick_connect_synced_item_plays_through_the_proxy",
     ),
     (
         "GET",

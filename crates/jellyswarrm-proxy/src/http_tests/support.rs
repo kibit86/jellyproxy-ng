@@ -2,7 +2,7 @@
 //! independently observable backends. Unmatched upstream requests return 404.
 use crate::{
     auth::service::LocalUser,
-    config::{AppConfig, MediaStreamingMode},
+    config::AppConfig,
     persistence::MIGRATOR,
     protocol::authorization::Authorization,
     protocol::device::Device,
@@ -143,12 +143,7 @@ impl Fixture {
             let upstream = wiremock::MockServer::start().await;
             let id = state
                 .server_storage
-                .add_server(
-                    &format!("Server {i}"),
-                    &upstream.uri(),
-                    100,
-                    MediaStreamingMode::Proxy,
-                )
+                .add_server(&format!("Server {i}"), &upstream.uri(), 100)
                 .await
                 .unwrap();
             let server = state

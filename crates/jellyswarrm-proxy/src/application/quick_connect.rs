@@ -308,7 +308,7 @@ mod tests {
             mapping_authentication::MappingAuthenticator,
             quick_connect::{QuickConnectStorage, RedemptionError},
         },
-        config::{AppConfig, MediaStreamingMode},
+        config::AppConfig,
         persistence::MIGRATOR,
         servers::ServerStorageService,
     };
@@ -334,7 +334,7 @@ mod tests {
             .unwrap();
         let servers = ServerStorageService::new(pool.clone());
         let id = servers
-            .add_server("Backend", &backend.uri(), 100, MediaStreamingMode::Proxy)
+            .add_server("Backend", &backend.uri(), 100)
             .await
             .unwrap();
         let server = servers.get_server_by_id(id).await.unwrap().unwrap();

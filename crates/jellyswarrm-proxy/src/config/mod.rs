@@ -24,33 +24,6 @@ use base64::prelude::*;
 
 use crate::domain::security::Password;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub(crate) enum MediaStreamingMode {
-    Redirect,
-    Proxy,
-}
-
-impl std::str::FromStr for MediaStreamingMode {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "redirect" => Ok(MediaStreamingMode::Redirect),
-            "proxy" => Ok(MediaStreamingMode::Proxy),
-            _ => Err(format!("Invalid media streaming mode: {}", s)),
-        }
-    }
-}
-
-impl fmt::Display for MediaStreamingMode {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            MediaStreamingMode::Redirect => write!(f, "Redirect"),
-            MediaStreamingMode::Proxy => write!(f, "Proxy"),
-        }
-    }
-}
-
 pub(crate) static CLIENT_INFO: LazyLock<ClientInfo> = LazyLock::new(|| ClientInfo {
     client: "JellyProxy-NG".to_string(),
     device: "Server".to_string(),
@@ -100,10 +73,6 @@ fn default_timeout() -> u64 {
 
 fn default_ui_route() -> UrlSegment {
     UrlSegment("ui".to_string())
-}
-
-fn default_media_streaming_mode() -> MediaStreamingMode {
-    MediaStreamingMode::Proxy
 }
 
 fn default_server_background_check_interval_secs() -> u64 {
@@ -207,11 +176,6 @@ define_fallback_deserializer!(
 define_fallback_deserializer!(deserialize_timeout, u64, default_timeout);
 define_fallback_deserializer!(deserialize_ui_route, UrlSegment, default_ui_route);
 define_fallback_deserializer!(
-    deserialize_media_streaming_mode,
-    MediaStreamingMode,
-    default_media_streaming_mode
-);
-define_fallback_deserializer!(
     deserialize_server_background_check_interval_secs,
     u64,
     default_server_background_check_interval_secs
@@ -234,8 +198,6 @@ pub(crate) struct PreconfiguredServer {
     pub(crate) url: String,
     pub(crate) name: String,
     pub(crate) priority: i32,
-    #[serde(default = "default_media_streaming_mode")]
-    pub(crate) media_streaming_mode: MediaStreamingMode,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -287,12 +249,6 @@ pub(crate) struct AppConfig {
 
     #[serde(default)]
     pub(crate) url_prefix: Option<UrlSegment>,
-
-    #[serde(
-        default = "default_media_streaming_mode",
-        deserialize_with = "deserialize_media_streaming_mode"
-    )]
-    pub(crate) media_streaming_mode: MediaStreamingMode,
 
     #[serde(
         default = "default_server_background_check_interval_secs",
@@ -350,7 +306,6 @@ impl Default for AppConfig {
             timeout: default_timeout(),
             ui_route: default_ui_route(),
             url_prefix: None,
-            media_streaming_mode: default_media_streaming_mode(),
             server_background_check_interval_secs: default_server_background_check_interval_secs(),
             auto_create_users_on_login: default_auto_create_users_on_login(),
             merge_libraries: default_merge_libraries(),
@@ -381,7 +336,6 @@ impl fmt::Debug for AppConfig {
             .field("timeout", &self.timeout)
             .field("ui_route", &self.ui_route)
             .field("url_prefix", &self.url_prefix)
-            .field("media_streaming_mode", &self.media_streaming_mode)
             .field(
                 "server_background_check_interval_secs",
                 &self.server_background_check_interval_secs,

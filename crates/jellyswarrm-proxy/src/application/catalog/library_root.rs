@@ -597,7 +597,7 @@ async fn process_media_item_for_server(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{config::MediaStreamingMode, servers::url::ServerUrl};
+    use crate::servers::url::ServerUrl;
     use serde_json::json;
 
     fn typed_media_item(id: &str, item_type: &str, collection_type: Option<&str>) -> MediaItem {
@@ -633,7 +633,6 @@ mod tests {
                 name: format!("Server {server_id}"),
                 url: ServerUrl::parse(&format!("http://server-{server_id}.example")).unwrap(),
                 priority,
-                media_streaming_mode: MediaStreamingMode::Redirect,
                 created_at: chrono::Utc::now(),
                 updated_at: chrono::Utc::now(),
             },

@@ -79,12 +79,7 @@ pub(crate) async fn run() -> Result<(), Box<dyn std::error::Error>> {
         );
         for server in &loaded_config.preconfigured_servers {
             match server_storage
-                .upsert_preconfigured_server(
-                    &server.name,
-                    &server.url,
-                    server.priority,
-                    server.media_streaming_mode,
-                )
+                .upsert_preconfigured_server(&server.name, &server.url, server.priority)
                 .await
             {
                 Ok(_server_id) => {

@@ -129,7 +129,6 @@ impl From<DeliveryError> for ApplicationError {
     fn from(error: DeliveryError) -> Self {
         match error {
             DeliveryError::Transport(error) => Self::UpstreamTransport(error),
-            DeliveryError::Header(error) => Self::Internal(error.into()),
             DeliveryError::Playlist(error) => error.into(),
         }
     }

@@ -12,8 +12,6 @@ use crate::upstream::headers::remove_hop_by_hop_headers;
 pub(crate) enum DeliveryError {
     #[error("upstream transport failure")]
     Transport(#[source] reqwest::Error),
-    #[error("redirect encoding failed")]
-    Header(#[source] hyper::header::InvalidHeaderValue),
     #[error("playlist delivery failed")]
     Playlist(#[from] hls::HlsError),
 }
@@ -51,46 +49,6 @@ pub(crate) struct DeliveryResponse {
     pub(crate) status: StatusCode,
     pub(crate) headers: HeaderMap,
     pub(crate) body: DeliveryBody,
-}
-
-/// Encode a backend-owned temporary redirect using already selected credentials.
-pub(crate) fn redirect(
-    request: &reqwest::Request,
-    backend_token: Option<&str>,
-) -> Result<DeliveryResponse, DeliveryError> {
-    let mut url = request.url().clone();
-    // Redirects cannot carry the upstream Authorization header. Replace any
-    // existing query credential with Jellyfin's canonical query token.
-    if let Some(token) = backend_token {
-        let pairs = url
-            .query_pairs()
-            .filter(|(key, _)| {
-                !crate::protocol::routes::matches_case_insensitive(
-                    key,
-                    crate::protocol::routes::API_KEY_QUERY_TAGS,
-                )
-            })
-            .map(|(key, value)| (key.into_owned(), value.into_owned()))
-            .collect::<Vec<_>>();
-        url.query_pairs_mut()
-            .clear()
-            .extend_pairs(pairs)
-            .append_pair("ApiKey", token);
-    }
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        header::LOCATION,
-        header::HeaderValue::from_str(url.as_ref()).map_err(DeliveryError::Header)?,
-    );
-    headers.insert(
-        header::REFERRER_POLICY,
-        header::HeaderValue::from_static("no-referrer"),
-    );
-    Ok(DeliveryResponse {
-        status: StatusCode::TEMPORARY_REDIRECT,
-        headers,
-        body: DeliveryBody::Empty,
-    })
 }
 
 /// Execute a resolved request without selecting or changing its backend.
@@ -146,40 +104,4 @@ pub(crate) async fn proxy(
         headers,
         body: DeliveryBody::Stream(Box::pin(stream)),
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn redirect_replaces_credentials_and_preserves_resource_query() {
-        let request = reqwest::Client::new()
-            .get("http://upstream/Videos/item/stream?api_key=old&Range=1&Static=true")
-            .build()
-            .unwrap();
-        let response = redirect(&request, Some("backend-token")).unwrap();
-        assert_eq!(response.status, StatusCode::TEMPORARY_REDIRECT);
-        assert_eq!(response.headers[header::REFERRER_POLICY], "no-referrer");
-        assert!(matches!(response.body, DeliveryBody::Empty));
-        let url = url::Url::parse(response.headers[header::LOCATION].to_str().unwrap()).unwrap();
-        assert_eq!(
-            url.query_pairs().collect::<Vec<_>>(),
-            vec![
-                ("Range".into(), "1".into()),
-                ("Static".into(), "true".into()),
-                ("ApiKey".into(), "backend-token".into()),
-            ]
-        );
-    }
-
-    #[test]
-    fn redirect_without_token_keeps_original_url() {
-        let request = reqwest::Client::new()
-            .get("http://upstream/Audio/item/universal?Static=true")
-            .build()
-            .unwrap();
-        let response = redirect(&request, None).unwrap();
-        assert_eq!(response.headers[header::LOCATION], request.url().as_str());
-    }
 }

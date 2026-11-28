@@ -41,7 +41,7 @@ JellyProxy-NG is a reverse proxy that lets you combine multiple Jellyfin servers
 ### ✅ Working
 
 * **Unified Library Access** – Browse media from multiple Jellyfin servers in one place.
-* **Direct or Proxied Playback** – Per server: `Redirect` sends the client straight to the original server, `Proxy` relays the media through JellyProxy-NG (needed when clients cannot reach that server). Transcoding always happens on the server that owns the media.
+* **Always Proxied Playback** – Media is always relayed through JellyProxy-NG, so clients never need to reach your Jellyfin servers (a per-server "redirect" mode existed up to 2.0.0 and was removed). Transcoding always happens on the server that owns the media.
 * **User Mapping** – Link accounts across servers for a consistent user experience.
 * **API Compatibility** – Appears as a normal Jellyfin server, so existing apps and tools still work.
 * **My servers, Media and Profile** – Each user connects their own account on every server (password or Quick Connect), browses their media and changes their password.
@@ -209,8 +209,7 @@ just http-test-merged   # Merged libraries with deduplicated media
 ```
 
 The suite follows movies, episodes and audio from library discovery through
-media details, playback negotiation, and direct/HLS delivery in proxy and
-redirect modes. See the [HTTP test guide](crates/jellyswarrm-proxy/src/http_tests/README.md)
+media details, playback negotiation, and direct/HLS delivery through the proxy. See the [HTTP test guide](crates/jellyswarrm-proxy/src/http_tests/README.md)
 for coverage and fixture details. These mock-backed tests are separate from
 `just integration-test` and the browser integration commands, which use real
 Jellyfin servers and media.

@@ -167,19 +167,12 @@ mod tests {
 
     #[tokio::test]
     async fn delivery_translation_needs_only_media_storage_and_a_resolved_server() {
-        use crate::{
-            config::MediaStreamingMode, persistence::MIGRATOR, servers::ServerStorageService,
-        };
+        use crate::{persistence::MIGRATOR, servers::ServerStorageService};
         let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
         MIGRATOR.run(&pool).await.unwrap();
         let registry = ServerStorageService::new(pool.clone());
         let id = registry
-            .add_server(
-                "Backend",
-                "http://backend.example",
-                100,
-                MediaStreamingMode::Proxy,
-            )
+            .add_server("Backend", "http://backend.example", 100)
             .await
             .unwrap();
         let server = registry.get_server_by_id(id).await.unwrap().unwrap();

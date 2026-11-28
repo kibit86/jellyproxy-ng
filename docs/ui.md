@@ -28,10 +28,9 @@ later does nothing; it only matters again if the database is deleted. The admini
    - **Jellyfin URL** – The full URL to your Jellyfin server (e.g. `http://jellyfin.example.com`). It is also stored in
      the mappings and sessions: to change it later, remove the server and add it again (mappings are redone).
    - **Priority** – Determines which server takes precedence for tasks not handled by the proxy (such as theming/styling). Higher numbers = higher priority.
-   - **Streaming** – Choose `Redirect` when clients can reach that Jellyfin server directly, or `Proxy` when the stream must pass through JellyProxy-NG.
 3. Click **Add**.
 
-You can change the streaming mode of an existing server from the server list. To remove a server, click **Delete**.
+All media always passes through JellyProxy-NG (there is no direct/redirect mode): clients never need to reach the Jellyfin servers. To remove a server, click **Delete**.
 Servers can also be listed in the configuration file (`preconfigured_servers`, see [config.md](config.md)).
 
 ## My servers

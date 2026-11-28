@@ -941,7 +941,7 @@
 
 .server-form-grid {
   display: grid;
-  grid-template-columns: minmax(10rem, 1fr) minmax(13rem, 1.35fr) minmax(7.5rem, 0.7fr) minmax(12rem, 1fr) auto;
+  grid-template-columns: minmax(10rem, 1fr) minmax(13rem, 1.35fr) minmax(7.5rem, 0.7fr) auto;
   gap: 1rem;
   align-items: start;
 }
@@ -995,12 +995,6 @@
   min-width: 8.5rem;
   width: auto;
   white-space: nowrap;
-}
-
-.streaming-mode-select {
-  margin-bottom: 0;
-  min-width: 0;
-  width: 100%;
 }
 
 @media (max-width: 1100px) {

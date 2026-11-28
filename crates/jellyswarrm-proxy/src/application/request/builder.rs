@@ -137,13 +137,9 @@ mod tests {
 
     use super::*;
     use crate::{
-        auth::service::UserAuthorizationService,
-        config::{AppConfig, MediaStreamingMode},
-        libraries::service::VirtualLibraryService,
-        media::storage::MediaStorageService,
-        persistence::MIGRATOR,
-        playback::PlaybackRegistry,
-        servers::storage::ServerStorageService,
+        auth::service::UserAuthorizationService, config::AppConfig,
+        libraries::service::VirtualLibraryService, media::storage::MediaStorageService,
+        persistence::MIGRATOR, playback::PlaybackRegistry, servers::storage::ServerStorageService,
     };
 
     async fn fixture() -> (UrlProcessor, MediaStorageService, Server, Server) {
@@ -159,10 +155,7 @@ mod tests {
                 100,
             ),
         ] {
-            let id = servers
-                .add_server(name, url, priority, MediaStreamingMode::Redirect)
-                .await
-                .unwrap();
+            let id = servers.add_server(name, url, priority).await.unwrap();
             backends.push(servers.get_server_by_id(id).await.unwrap().unwrap());
         }
         let media = MediaStorageService::new(pool.clone());

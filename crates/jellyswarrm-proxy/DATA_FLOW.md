@@ -192,22 +192,19 @@ published only after reconciliation and final-response validation.
 ```mermaid
 flowchart TD
     Request[Client: stream, playlist or resource URL] --> Resolve[Resolve authorized target from IDs and any playback binding]
-    Resolve --> Mode{Backend streaming mode}
-    Mode -->|Proxy| Fetch[Proxy fetches from Jellyfin using backend credentials]
+    Resolve --> Fetch[Proxy fetches from Jellyfin using backend credentials]
     Fetch --> Stream[Client receives bytes or rewritten HLS playlist]
-    Mode -->|Redirect| Redirect[Client receives backend URL with backend token]
-    Redirect --> Direct[Client fetches directly from Jellyfin]
 ```
 
 Delivery can use explicit media/source IDs without a prior `PlaybackInfo` request;
 when a known binding is used, it must agree with the request's other routing inputs.
-In proxy mode, HLS links are translated for subsequent proxy requests. In redirect
-mode, the backend token is placed in the URL because redirects cannot forward an
-authorization header.
+HLS links are translated for subsequent proxy requests. Media is always relayed: the proxy
+never redirects a client to a backend URL (there used to be a per-server "redirect" mode,
+removed in 2.1.0, which had to put the backend token in the URL).
 
 **Code:** [delivery selection](src/application/playback/resources.rs),
 [bindings](src/playback.rs),
-[streaming and redirects](src/upstream/delivery.rs).
+[streaming](src/upstream/delivery.rs).
 
 ## Sending a remote-control command
 

@@ -76,7 +76,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::{config::MediaStreamingMode, persistence::MIGRATOR};
+    use crate::persistence::MIGRATOR;
 
     async fn test_storage() -> ServerStorageService {
         let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
@@ -120,21 +120,11 @@ mod tests {
 
         let storage = test_storage().await;
         storage
-            .add_server(
-                "Low priority",
-                &low_priority.uri(),
-                100,
-                MediaStreamingMode::Redirect,
-            )
+            .add_server("Low priority", &low_priority.uri(), 100)
             .await
             .unwrap();
         storage
-            .add_server(
-                "High priority",
-                &high_priority.uri(),
-                200,
-                MediaStreamingMode::Redirect,
-            )
+            .add_server("High priority", &high_priority.uri(), 200)
             .await
             .unwrap();
         storage.check_servers_health().await;
@@ -160,21 +150,11 @@ mod tests {
 
         let storage = test_storage().await;
         storage
-            .add_server(
-                "Low priority",
-                &low_priority.uri(),
-                100,
-                MediaStreamingMode::Redirect,
-            )
+            .add_server("Low priority", &low_priority.uri(), 100)
             .await
             .unwrap();
         storage
-            .add_server(
-                "High priority",
-                &high_priority.uri(),
-                200,
-                MediaStreamingMode::Redirect,
-            )
+            .add_server("High priority", &high_priority.uri(), 200)
             .await
             .unwrap();
         storage.check_servers_health().await;

@@ -25,7 +25,7 @@ pub(crate) fn compare_routes(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{config::MediaStreamingMode, domain::ids::ServerId, servers::url::ServerUrl};
+    use crate::{domain::ids::ServerId, servers::url::ServerUrl};
 
     fn server(priority: i32, name: &str, id: i64) -> Server {
         Server {
@@ -33,7 +33,6 @@ mod tests {
             name: name.into(),
             id: ServerId::new(id),
             url: ServerUrl::parse("http://backend.invalid").unwrap(),
-            media_streaming_mode: MediaStreamingMode::Redirect,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         }

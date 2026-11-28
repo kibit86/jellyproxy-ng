@@ -492,7 +492,7 @@ pub(crate) async fn check_user_server_status(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{config::MediaStreamingMode, domain::ids::ServerId, servers::url::ServerUrl};
+    use crate::{domain::ids::ServerId, servers::url::ServerUrl};
     use askama::Template;
 
     fn server(id: i64, name: &str) -> Server {
@@ -501,7 +501,6 @@ mod tests {
             name: name.into(),
             url: ServerUrl::parse("http://backend.invalid").unwrap(),
             priority: 100,
-            media_streaming_mode: MediaStreamingMode::Proxy,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         }

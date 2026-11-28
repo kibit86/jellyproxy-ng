@@ -237,7 +237,6 @@ fn discovered(
 mod tests {
     use super::*;
     use crate::{
-        config::MediaStreamingMode,
         domain::security::{encrypt_password, Password},
         media::MediaStorageService,
         persistence::MIGRATOR,
@@ -258,7 +257,7 @@ mod tests {
         let libraries = VirtualLibraryService::new(pool.clone(), registry.clone(), media);
         let users = UserAuthorizationService::new(pool);
         let id = registry
-            .add_server("Backend", &upstream.uri(), 100, MediaStreamingMode::Proxy)
+            .add_server("Backend", &upstream.uri(), 100)
             .await
             .unwrap();
         libraries

@@ -191,6 +191,11 @@ Know these before touching the areas; each has tests under `src/http_tests/` or 
   a new login of the same (user, DeviceId) revokes the old token; the token alone identifies the caller (any `DeviceId`
   header works); a `userId` of another user is 403; `POST /Sessions/Logout` revokes. Tests: `http_tests/session_recovery.rs`
   models a Jellyfin-like backend. In unit tests, tokens are deterministic: `auth::service::test_token(user_id, device_id)`.
+- **Media is always proxied** (2.1.0): there is no per-server "redirect" streaming mode any more (enum, UI select, route,
+  `media_streaming_mode` config key and `delivery::redirect` removed; the key in an old config file is ignored). The column
+  `servers.media_streaming_mode` is **kept** (NOT NULL, default `'Redirect'`, CHECK) so no migration is needed and rollback to
+  2.0.0 stays possible: new servers are inserted with `'Proxy'` and the code never reads it. Do not reintroduce a way for a
+  client to be sent to a backend URL: the proxy exists so that clients never reach the servers.
 - **Server panels / pass-through** (`ui/backend_passthrough.rs`, `ui/backend_identity.rs`): `/ui/backend/{id}/…`
   proxies a server's own web client, signed in with the mapped account (`PanelIdentities`), or in "manual" mode for
   a server with no mapped account (first-run setup wizard). The start page gets a script injected that isolates

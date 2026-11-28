@@ -177,7 +177,7 @@ mod tests {
         }
     }
     use crate::{
-        config::{AppConfig, MediaStreamingMode},
+        config::AppConfig,
         persistence::MIGRATOR,
         protocol::device::Device,
         protocol::models::{
@@ -333,7 +333,7 @@ mod tests {
 
         let upstream_server_id = state
             .server_storage
-            .add_server("Upstream", &upstream.uri(), 100, MediaStreamingMode::Proxy)
+            .add_server("Upstream", &upstream.uri(), 100)
             .await
             .unwrap();
         let upstream_server = state

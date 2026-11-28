@@ -549,12 +549,7 @@ mod tests {
             .unwrap();
         for name in ["first", "second"] {
             let id = server_storage
-                .add_server(
-                    name,
-                    &format!("http://{name}.example"),
-                    100,
-                    MediaStreamingMode::Redirect,
-                )
+                .add_server(name, &format!("http://{name}.example"), 100)
                 .await
                 .unwrap();
             let server = server_storage.get_server_by_id(id).await.unwrap().unwrap();
@@ -743,13 +738,9 @@ mod tests {
 
     use super::*;
     use crate::{
-        auth::service::UserAuthorizationService,
-        config::{AppConfig, MediaStreamingMode},
-        libraries::service::VirtualLibraryService,
-        media::storage::MediaStorageService,
-        persistence::MIGRATOR,
-        playback::PlaybackRegistry,
-        servers::storage::ServerStorageService,
+        auth::service::UserAuthorizationService, config::AppConfig,
+        libraries::service::VirtualLibraryService, media::storage::MediaStorageService,
+        persistence::MIGRATOR, playback::PlaybackRegistry, servers::storage::ServerStorageService,
     };
 
     #[tokio::test]
@@ -790,12 +781,7 @@ mod tests {
         MIGRATOR.run(&pool).await.unwrap();
         let server_storage = ServerStorageService::new(pool.clone());
         let server_id = server_storage
-            .add_server(
-                "Server",
-                "http://server.example",
-                100,
-                MediaStreamingMode::Redirect,
-            )
+            .add_server("Server", "http://server.example", 100)
             .await
             .unwrap();
         let server = server_storage
@@ -844,12 +830,7 @@ mod tests {
         MIGRATOR.run(&pool).await.unwrap();
         let server_storage = ServerStorageService::new(pool.clone());
         let server_id = server_storage
-            .add_server(
-                "Server",
-                "http://server.example",
-                100,
-                MediaStreamingMode::Redirect,
-            )
+            .add_server("Server", "http://server.example", 100)
             .await
             .unwrap();
         let server = server_storage
@@ -896,21 +877,11 @@ mod tests {
         MIGRATOR.run(&pool).await.unwrap();
         let server_storage = ServerStorageService::new(pool.clone());
         let first_id = server_storage
-            .add_server(
-                "First",
-                "http://first.example",
-                200,
-                MediaStreamingMode::Redirect,
-            )
+            .add_server("First", "http://first.example", 200)
             .await
             .unwrap();
         let second_id = server_storage
-            .add_server(
-                "Second",
-                "http://second.example",
-                100,
-                MediaStreamingMode::Redirect,
-            )
+            .add_server("Second", "http://second.example", 100)
             .await
             .unwrap();
         let first = server_storage
@@ -961,12 +932,7 @@ mod tests {
         MIGRATOR.run(&pool).await.unwrap();
         let server_storage = ServerStorageService::new(pool.clone());
         let server_id = server_storage
-            .add_server(
-                "Server",
-                "http://server.example",
-                100,
-                MediaStreamingMode::Redirect,
-            )
+            .add_server("Server", "http://server.example", 100)
             .await
             .unwrap();
         let server = server_storage

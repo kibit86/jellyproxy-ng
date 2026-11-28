@@ -267,12 +267,7 @@ async fn web_episode_queue_validates_the_anchor_before_widening_the_query() {
     let server = f
         .state
         .server_storage
-        .add_server(
-            "Forbidden",
-            "http://127.0.0.1:1",
-            1,
-            MediaStreamingMode::Proxy,
-        )
+        .add_server("Forbidden", "http://127.0.0.1:1", 1)
         .await
         .unwrap();
     let server = f

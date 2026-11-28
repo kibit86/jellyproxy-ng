@@ -32,11 +32,6 @@ async fn quick_connect(f: &Fixture) -> (String, String) {
         .add_server_mapping(&user.id, &server, "kodi", &"password".into(), None)
         .await
         .unwrap();
-    f.state
-        .server_storage
-        .update_server_media_streaming_mode(server.id, MediaStreamingMode::Redirect)
-        .await
-        .unwrap();
     Mock::given(method("POST"))
         .and(path("/Users/AuthenticateByName"))
         .and(body_json(json!({"Username":"kodi","Pw":"password"})))
@@ -97,7 +92,7 @@ fn playback_authorization(user: &str, token: &str, device_id: &str) -> String {
 }
 
 #[tokio::test]
-async fn kodi_quick_connect_synced_item_plays_in_redirect_mode() {
+async fn kodi_quick_connect_synced_item_plays_through_the_proxy() {
     let f = Fixture::new().await;
     f.healthy().await;
     let (authorization, user) = quick_connect(&f).await;
@@ -179,7 +174,7 @@ async fn kodi_quick_connect_synced_item_plays_in_redirect_mode() {
     Mock::given(method("GET"))
         .and(path(format!("/Videos/{ITEM}/stream")))
         .and(query_param("MediaSourceId", ITEM))
-        .and(query_param("ApiKey", "kodi-backend-token"))
+        .and(header_regex("authorization", "kodi-backend-token"))
         .respond_with(ResponseTemplate::new(200).set_body_string("Kodi media"))
         .expect(1)
         .mount(&f.upstreams[1])
@@ -194,9 +189,7 @@ async fn kodi_quick_connect_synced_item_plays_in_redirect_mode() {
         .send()
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
-    let location = response.headers()["Location"].to_str().unwrap();
-    let response = reqwest::get(location).await.unwrap();
+    // The proxy relays the bytes itself, signed in with the Kodi account's backend token.
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(response.text().await.unwrap(), "Kodi media");
     f.upstreams[1].verify().await;

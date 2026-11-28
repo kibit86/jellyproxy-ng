@@ -22,7 +22,6 @@ const SESSIONS_SELECT: &str = r#"
         s.name as server_name,
         s.url as server_url_full,
         s.priority,
-        s.media_streaming_mode,
         s.created_at as server_created_at,
         s.updated_at as server_updated_at
     FROM authorization_sessions auth

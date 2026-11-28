@@ -221,7 +221,6 @@ impl MediaStorageService {
                 s.name AS server_name,
                 s.url AS server_url_full,
                 s.priority,
-                s.media_streaming_mode,
                 s.created_at AS server_created_at,
                 s.updated_at AS server_updated_at
             FROM movie_version_members vm

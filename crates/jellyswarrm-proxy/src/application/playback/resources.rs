@@ -10,10 +10,8 @@ use crate::{
         context::{AuthorizedTarget, RequestContext},
         input::OperationRequest,
     },
-    config::MediaStreamingMode,
     domain::ids::{BackendItemId, PlaybackSessionId, ViewerId, VirtualItemId},
     playback::PlaybackSession,
-    protocol::caller::JellyfinAuthorization,
     servers::storage::Server,
     upstream::{
         delivery::{self, DeliveryResponse},
@@ -130,65 +128,49 @@ async fn forward_media_request(
     viewer: Option<&str>,
 ) -> Result<DeliveryResponse, ApplicationError> {
     let url = request.url().clone();
-
-    match server.media_streaming_mode {
-        MediaStreamingMode::Redirect => {
-            info!(
-                "Redirecting {} via {}: {}",
-                log_label,
-                server.name,
-                url.path()
-            );
-            let token = JellyfinAuthorization::from_headers_url(request.headers(), request.url())
-                .and_then(|auth| auth.token());
-            delivery::redirect(&request, token.as_deref()).map_err(ApplicationError::from)
-        }
-        MediaStreamingMode::Proxy => {
-            info!(
-                "Proxying {} from {}: {}",
-                log_label,
-                server.name,
-                url.path()
-            );
-            let timeout = state.config.read().await.timeout;
-            let context = delivery::DeliveryContext::new(
-                &state.streaming_reqwest_client,
-                HlsContext::new(
-                    &state.translation.url_processor,
-                    server,
-                    proxy_api_key,
-                    viewer,
-                    timeout,
-                ),
-            );
-            // A 401 for the stored token arrives before any byte is streamed: log the device in
-            // again once and ask again.
-            let spare = request.try_clone();
-            let first = delivery::proxy(&context, request)
-                .await
-                .map_err(ApplicationError::from)?;
-            if first.status != hyper::StatusCode::UNAUTHORIZED {
-                return Ok(first);
-            }
-            let Some(mut again) = spare else {
-                return Ok(first);
-            };
-            let Some(stale) = crate::application::session_recovery::request_token(&again) else {
-                return Ok(first);
-            };
-            let Some(new_token) = state
-                .session_recovery
-                .recover_by_token(&state.user_authorization, server, &stale)
-                .await
-            else {
-                return Ok(first);
-            };
-            crate::application::session_recovery::swap_token(&mut again, &stale, &new_token);
-            delivery::proxy(&context, again)
-                .await
-                .map_err(ApplicationError::from)
-        }
+    info!(
+        "Proxying {} from {}: {}",
+        log_label,
+        server.name,
+        url.path()
+    );
+    let timeout = state.config.read().await.timeout;
+    let context = delivery::DeliveryContext::new(
+        &state.streaming_reqwest_client,
+        HlsContext::new(
+            &state.translation.url_processor,
+            server,
+            proxy_api_key,
+            viewer,
+            timeout,
+        ),
+    );
+    // A 401 for the stored token arrives before any byte is streamed: log the device in
+    // again once and ask again.
+    let spare = request.try_clone();
+    let first = delivery::proxy(&context, request)
+        .await
+        .map_err(ApplicationError::from)?;
+    if first.status != hyper::StatusCode::UNAUTHORIZED {
+        return Ok(first);
     }
+    let Some(mut again) = spare else {
+        return Ok(first);
+    };
+    let Some(stale) = crate::application::session_recovery::request_token(&again) else {
+        return Ok(first);
+    };
+    let Some(new_token) = state
+        .session_recovery
+        .recover_by_token(&state.user_authorization, server, &stale)
+        .await
+    else {
+        return Ok(first);
+    };
+    crate::application::session_recovery::swap_token(&mut again, &stale, &new_token);
+    delivery::proxy(&context, again)
+        .await
+        .map_err(ApplicationError::from)
 }
 
 fn proxy_api_key(context: &RequestContext) -> Option<String> {
@@ -377,9 +359,7 @@ mod tests {
     use crate::test_support::MediaFixture;
     use hyper::StatusCode;
 
-    async fn direct_fixture(
-        mode: MediaStreamingMode,
-    ) -> (
+    async fn direct_fixture() -> (
         MediaFixture,
         Server,
         RequestContext,
@@ -398,7 +378,7 @@ mod tests {
         let upstream = wiremock::MockServer::start().await;
         let servers = ServerStorageService::new(pool.clone());
         let id = servers
-            .add_server("Owner", &upstream.uri(), 100, mode)
+            .add_server("Owner", &upstream.uri(), 100)
             .await
             .unwrap();
         let server = servers.get_server_by_id(id).await.unwrap().unwrap();
@@ -446,7 +426,7 @@ mod tests {
 
     #[tokio::test]
     async fn delivery_transport_retains_cause_without_authenticated_url() {
-        let (state, server, _, _, _) = direct_fixture(MediaStreamingMode::Proxy).await;
+        let (state, server, _, _, _) = direct_fixture().await;
         let client = reqwest::Client::new();
         let context = delivery::DeliveryContext::new(
             &client,
@@ -477,8 +457,7 @@ mod tests {
 
     #[tokio::test]
     async fn unknown_direct_session_binds_only_after_success() {
-        let (state, server, context, item, upstream) =
-            direct_fixture(MediaStreamingMode::Proxy).await;
+        let (state, server, context, item, upstream) = direct_fixture().await;
         let operation = |session: &str| OperationRequest {
             original_request: reqwest::Request::new(
                 reqwest::Method::GET,
@@ -539,36 +518,6 @@ mod tests {
             binding.original_item_id.as_ref().map(|id| id.as_str()),
             Some("upstream-item")
         );
-    }
-
-    #[tokio::test]
-    async fn unknown_direct_session_binds_on_redirect() {
-        let (state, server, context, item, upstream) =
-            direct_fixture(MediaStreamingMode::Redirect).await;
-        let response = get_stream(&state, OperationRequest {
-            original_request: reqwest::Request::new(reqwest::Method::HEAD,
-                format!("http://proxy.example/Audio/{item}/universal?PlaySessionId=redirect&Extension=kept").parse().unwrap()),
-            context, body_analysis: None,
-        }).await.unwrap();
-        assert_eq!(response.status, StatusCode::TEMPORARY_REDIRECT);
-        assert!(matches!(response.body, delivery::DeliveryBody::Empty));
-        assert!(response.headers[hyper::header::LOCATION]
-            .to_str()
-            .unwrap()
-            .contains("/Audio/upstream-item/universal?PlaySessionId=redirect&Extension=kept"));
-        let (binding, _) = state
-            .playback_registry
-            .resolve_report_session("redirect", "viewer")
-            .await
-            .unwrap()
-            .unwrap()
-            .into_parts();
-        assert_eq!(binding.server_id, server.id);
-        assert_eq!(
-            binding.original_item_id.as_ref().map(|id| id.as_str()),
-            Some("upstream-item")
-        );
-        assert!(upstream.received_requests().await.unwrap().is_empty());
     }
 
     fn playback_session(session_id: &str, user_id: &str, server_id: i64) -> PlaybackSession {

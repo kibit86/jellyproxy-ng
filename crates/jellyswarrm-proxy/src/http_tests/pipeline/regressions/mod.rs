@@ -149,64 +149,6 @@ async fn regression_filtered_playback_keeps_sibling_versions_playable() {
 }
 
 #[tokio::test]
-async fn regression_redirect_authenticates_at_the_backend() {
-    let f = Fixture::new().await;
-    healthy(&f).await;
-    let (mapping, server) = f
-        .state
-        .media_storage
-        .get_media_mapping_with_server(&f.items[0].as_str().into())
-        .await
-        .unwrap()
-        .unwrap();
-    f.state
-        .server_storage
-        .update_server_media_streaming_mode(server.id, MediaStreamingMode::Redirect)
-        .await
-        .unwrap();
-    let upstream_path = format!("/Videos/{}/master.m3u8", mapping.original_media_id.as_str());
-    Mock::given(path(&upstream_path))
-        .respond_with(ResponseTemplate::new(401))
-        .with_priority(10)
-        .mount(&f.upstreams[0])
-        .await;
-    Mock::given(path(&upstream_path))
-        .and(query_param("ApiKey", "backend-token-0"))
-        .and(query_param("Static", "true"))
-        .respond_with(ResponseTemplate::new(200).set_body_string("authenticated media"))
-        .mount(&f.upstreams[0])
-        .await;
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .unwrap();
-    for headers in [
-        vec![("Authorization", auth(&f.user, "tv"))],
-        vec![("X-MediaBrowser-Token", f.token().clone())],
-    ] {
-        let mut request = client.get(format!(
-            "{}/Videos/{}/master.m3u8?Static=true",
-            f.url, f.items[0]
-        ));
-        for (key, value) in headers {
-            request = request.header(key, value);
-        }
-        let response = request.send().await.unwrap();
-        assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
-        // A redirect cannot supply the proxy's rewritten Authorization header.
-        let response = reqwest::get(response.headers()["Location"].to_str().unwrap())
-            .await
-            .unwrap();
-        assert_eq!(
-            response.status(),
-            StatusCode::OK,
-            "following Location alone must authenticate"
-        );
-        assert_eq!(response.text().await.unwrap(), "authenticated media");
-    }
-}
-
-#[tokio::test]
 async fn regression_playback_delivery_urls_reach_exact_subtitle_and_attachment() {
     let f = Fixture::new().await;
     healthy(&f).await;

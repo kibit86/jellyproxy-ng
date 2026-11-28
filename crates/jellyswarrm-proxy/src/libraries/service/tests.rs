@@ -159,7 +159,7 @@ impl Fixture {
             sqlx::query(
                 "INSERT INTO servers \
                      (id, name, url, priority, media_streaming_mode, created_at, updated_at) \
-                     VALUES (?, ?, ?, ?, 'Redirect', datetime('now'), datetime('now'))",
+                     VALUES (?, ?, ?, ?, 'Proxy', datetime('now'), datetime('now'))",
             )
             .bind(id)
             .bind(format!("Server {id}"))

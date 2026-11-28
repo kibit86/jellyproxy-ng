@@ -479,7 +479,7 @@ fn storage_error(error: sqlx::Error) -> ApplicationError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{config::MediaStreamingMode, domain::ids::ServerId, servers::url::ServerUrl};
+    use crate::{domain::ids::ServerId, servers::url::ServerUrl};
     use serde_json::json;
 
     fn server(server_id: i64, name: &str) -> Server {
@@ -488,7 +488,6 @@ mod tests {
             name: name.to_string(),
             url: ServerUrl::parse("http://example:8096").unwrap(),
             priority: 100,
-            media_streaming_mode: MediaStreamingMode::Redirect,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         }

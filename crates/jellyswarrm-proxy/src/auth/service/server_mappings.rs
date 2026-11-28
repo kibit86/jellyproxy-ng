@@ -587,7 +587,7 @@ impl UserAuthorizationService {
     ) -> Result<Vec<Server>, sqlx::Error> {
         let rows = sqlx::query(
             r#"
-            SELECT s.id, s.name, s.url, s.priority, s.media_streaming_mode, s.created_at, s.updated_at
+            SELECT s.id, s.name, s.url, s.priority, s.created_at, s.updated_at
             FROM servers s
             JOIN server_mappings sm ON s.id = sm.server_id
             WHERE sm.user_id = ?
